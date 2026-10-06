@@ -1,17 +1,19 @@
--- CoinClicker v29 - Auto Equip Tool Adicionado
--- [1] Auto Equip procura e equipa o item "CoinClicker" do inventário automaticamente.
--- [2] Auto Golden usa simulação física de clique de mouse (1 a 4s).
--- [3] AutoClick rápido + humanizado e Anti-AFK mantidos.
+-- CoinClicker v32 - Auto Screen Click (Safe Area) no Equip
+-- [1] Monitora quando o "CoinClicker" entra na mão (Character).
+-- [2] Executa um clique no topo da tela (área sem menus) para abrir o tablet/notebook.
+-- [3] Funciona tanto se você equipar manualmente quanto pelo Auto Equip.
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local VirtualUser = game:GetService("VirtualUser")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local GuiService = game:GetService("GuiService")
+local Workspace = game:GetService("Workspace")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
+-- Anti-AFK
 player.Idled:Connect(function()
     VirtualUser:CaptureController()
     VirtualUser:ClickButton2(Vector2.new())
@@ -44,12 +46,49 @@ local State = {
 }
 
 local function getRandomHumanDelay()
-    return math.random(100, 900) / 100 -- 1.0s a 9.0s
+    return math.random(100, 900) / 100
 end
 
 local function getGoldenDelay()
-    return math.random(100, 400) / 100 -- 1.0s a 4.0s
+    return math.random(100, 400) / 100
 end
+
+--==================================================
+-- DETECÇÃO E CLIQUE EM ÁREA SEGURA (SEM MENU)
+--==================================================
+local function clickSafeScreenArea()
+    task.wait(0.25) -- Aguarda a animação de pegar o tablet
+    local camera = Workspace.CurrentCamera
+    if not camera then return end
+    
+    local viewport = camera.ViewportSize
+    
+    -- Calcula uma área segura: Centro horizontal (X), mas lá em cima (Y)
+    -- 15% do topo da tela (evita menus do meio, chat na esquerda e leaderstats na direita)
+    local safeX = viewport.X / 2
+    local safeY = viewport.Y * 0.15 
+    
+    pcall(function()
+        VirtualInputManager:SendMouseButtonEvent(safeX, safeY, 0, true, game, 0)
+        task.wait(0.05)
+        VirtualInputManager:SendMouseButtonEvent(safeX, safeY, 0, false, game, 0)
+    end)
+end
+
+local function setupCharacterListener(char)
+    if not char then return end
+    
+    char.ChildAdded:Connect(function(child)
+        if child:IsA("Tool") and child.Name == "CoinClicker" then
+            task.spawn(clickSafeScreenArea)
+        end
+    end)
+end
+
+if player.Character then
+    setupCharacterListener(player.Character)
+end
+player.CharacterAdded:Connect(setupCharacterListener)
 
 --==================================================
 -- FUNÇÕES DE SUPORTE
@@ -401,11 +440,11 @@ end
 --==================================================
 -- INTERFACE (HUB)
 --==================================================
-local old = playerGui:FindFirstChild("CoinClickerV29")
+local old = playerGui:FindFirstChild("CoinClickerV32")
 if old then old:Destroy() end
 
 local Gui = Instance.new("ScreenGui")
-Gui.Name = "CoinClickerV29"
+Gui.Name = "CoinClickerV32"
 Gui.ResetOnSpawn = false
 Gui.IgnoreGuiInset = true
 Gui.DisplayOrder = 1000
@@ -430,7 +469,7 @@ local Title = Instance.new("TextLabel")
 Title.Size = UDim2.new(1,-44,0,34)
 Title.Position = UDim2.fromOffset(12,4)
 Title.BackgroundTransparency = 1
-Title.Text = "CoinClicker v29"
+Title.Text = "CoinClicker v32"
 Title.TextColor3 = Color3.new(1,1,1)
 Title.Font = Enum.Font.GothamBold
 Title.TextSize = 16
@@ -532,11 +571,11 @@ connection = RunService.Heartbeat:Connect(function()
     
     -- AUTO EQUIP
     if State.AutoEquip and now >= State.NextEquipCheck then
-        State.NextEquipCheck = now + 1 -- Checa a cada 1 segundo para não sobrecarregar
+        State.NextEquipCheck = now + 1
         autoEquipTool()
     end
     
-    -- AUTOCLICK RÁPIDO & HUMANIZADO
+    -- AUTOCLICK
     if State.AutoClick then
         if State.StaminaStart == 0 then
             State.StaminaStart = now
@@ -566,7 +605,7 @@ connection = RunService.Heartbeat:Connect(function()
                     local big = getBigCoin()
                     if big then
                         press(big, true)
-                        Status.Text = "Clicando Rápido... (" .. remainingClick .. "s restantes)"
+                        Status.Text = "Clicando Rápido... (" .. remainingClick .. "s)"
                     else
                         cachedBigCoin = nil
                         Status.Text = "Aguardando Item Equipado..."
@@ -584,25 +623,22 @@ connection = RunService.Heartbeat:Connect(function()
         end
     end
     
-    -- COMPRA DE ITENS (Atraso 1 a 9s)
+    -- AUTOMAÇÕES DE COMPRA
     if State.AutoItems and now >= State.NextItemTime then
         State.NextItemTime = now + getRandomHumanDelay()
         buyBestGenerator()
     end
     
-    -- COMPRA DE BUFFS (Atraso 1 a 9s)
     if State.AutoBuff and now >= State.NextBuffTime then
         State.NextBuffTime = now + getRandomHumanDelay()
         buyAvailableUpgrade()
     end
     
-    -- ESTOURAR WRINKLERS (Atraso 1 a 9s)
     if State.AutoWrinkler and now >= State.NextWrinklerTime then
         State.NextWrinklerTime = now + getRandomHumanDelay()
         popWrinklers()
     end
     
-    -- AUTO GOLDEN (Atraso de 1 a 4s + Clique Físico de Mouse)
     if State.AutoGolden and now >= State.NextGoldenTime then
         State.NextGoldenTime = now + getGoldenDelay()
         clickGoldens()
@@ -623,4 +659,3 @@ local function stop()
 end
 
 Close.Activated:Connect(stop)
-print("[CoinClicker v29] Auto Equip ativado.")
