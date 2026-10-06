@@ -1,7 +1,7 @@
--- CoinClicker v33 - Auto Screen Click & Minimize UI
+-- CoinClicker v33 - Auto Screen Click & Minimize UI (Corrigido)
 -- [1] Monitora quando o "CoinClicker" entra na mão (Character).
--- [2] Executa um clique no topo da tela (área segura) para abrir o tablet.
--- [3] Adicionado botão de minimizar (-) para reduzir o tamanho da UI.
+-- [2] Executa a ativação direta do item e o clique na área segura da tela.
+-- [3] Botão de minimizar (-) mantido.
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -54,20 +54,32 @@ local function getGoldenDelay()
 end
 
 --==================================================
--- DETECÇÃO E CLIQUE EM ÁREA SEGURA (SEM MENU)
+-- DETECÇÃO E CLIQUE EM ÁREA SEGURA (CORRIGIDO)
 --==================================================
-local function clickSafeScreenArea()
-    task.wait(0.25)
+local function clickSafeScreenArea(tool)
+    -- Espera a animação do Roblox terminar de equipar o item
+    task.wait(0.6)
+    
+    -- Método 1: Ativação direta via engine do Roblox (Mais seguro)
+    if tool and tool:IsA("Tool") and tool.Parent == player.Character then
+        pcall(function()
+            tool:Activate()
+        end)
+    end
+    
+    -- Método 2: Clique físico na tela ajustado abaixo da barra do Roblox
     local camera = Workspace.CurrentCamera
     if not camera then return end
     
     local viewport = camera.ViewportSize
+    local inset = GuiService:GetGuiInset()
+    
     local safeX = viewport.X / 2
-    local safeY = viewport.Y * 0.15 
+    local safeY = (viewport.Y * 0.30) + inset.Y -- Descido para 30% da tela para fugir da barra
     
     pcall(function()
         VirtualInputManager:SendMouseButtonEvent(safeX, safeY, 0, true, game, 0)
-        task.wait(0.05)
+        task.wait(0.08)
         VirtualInputManager:SendMouseButtonEvent(safeX, safeY, 0, false, game, 0)
     end)
 end
@@ -75,9 +87,16 @@ end
 local function setupCharacterListener(char)
     if not char then return end
     
+    -- Verifica se já está na mão ao carregar o personagem
+    local currentTool = char:FindFirstChild("CoinClicker")
+    if currentTool then
+        task.spawn(function() clickSafeScreenArea(currentTool) end)
+    end
+    
+    -- Escuta quando a ferramenta entrar no personagem
     char.ChildAdded:Connect(function(child)
         if child:IsA("Tool") and child.Name == "CoinClicker" then
-            task.spawn(clickSafeScreenArea)
+            task.spawn(function() clickSafeScreenArea(child) end)
         end
     end)
 end
@@ -454,7 +473,7 @@ Main.BackgroundColor3 = Color3.fromRGB(18,15,27)
 Main.BorderSizePixel = 0
 Main.Active = true
 Main.Draggable = true
-Main.ClipsDescendants = true -- Permite esconder os itens de dentro ao diminuir o tamanho
+Main.ClipsDescendants = true
 Main.Parent = Gui
 Instance.new("UICorner", Main).CornerRadius = UDim.new(0,12)
 
