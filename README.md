@@ -1,7 +1,7 @@
--- CoinClicker v32 - Auto Screen Click (Safe Area) no Equip
+-- CoinClicker v33 - Auto Screen Click & Minimize UI
 -- [1] Monitora quando o "CoinClicker" entra na mão (Character).
--- [2] Executa um clique no topo da tela (área sem menus) para abrir o tablet/notebook.
--- [3] Funciona tanto se você equipar manualmente quanto pelo Auto Equip.
+-- [2] Executa um clique no topo da tela (área segura) para abrir o tablet.
+-- [3] Adicionado botão de minimizar (-) para reduzir o tamanho da UI.
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -57,14 +57,11 @@ end
 -- DETECÇÃO E CLIQUE EM ÁREA SEGURA (SEM MENU)
 --==================================================
 local function clickSafeScreenArea()
-    task.wait(0.25) -- Aguarda a animação de pegar o tablet
+    task.wait(0.25)
     local camera = Workspace.CurrentCamera
     if not camera then return end
     
     local viewport = camera.ViewportSize
-    
-    -- Calcula uma área segura: Centro horizontal (X), mas lá em cima (Y)
-    -- 15% do topo da tela (evita menus do meio, chat na esquerda e leaderstats na direita)
     local safeX = viewport.X / 2
     local safeY = viewport.Y * 0.15 
     
@@ -440,11 +437,11 @@ end
 --==================================================
 -- INTERFACE (HUB)
 --==================================================
-local old = playerGui:FindFirstChild("CoinClickerV32")
+local old = playerGui:FindFirstChild("CoinClickerV33")
 if old then old:Destroy() end
 
 local Gui = Instance.new("ScreenGui")
-Gui.Name = "CoinClickerV32"
+Gui.Name = "CoinClickerV33"
 Gui.ResetOnSpawn = false
 Gui.IgnoreGuiInset = true
 Gui.DisplayOrder = 1000
@@ -457,6 +454,7 @@ Main.BackgroundColor3 = Color3.fromRGB(18,15,27)
 Main.BorderSizePixel = 0
 Main.Active = true
 Main.Draggable = true
+Main.ClipsDescendants = true -- Permite esconder os itens de dentro ao diminuir o tamanho
 Main.Parent = Gui
 Instance.new("UICorner", Main).CornerRadius = UDim.new(0,12)
 
@@ -466,16 +464,17 @@ Stroke.Color = Color3.fromRGB(126,79,255)
 Stroke.Parent = Main
 
 local Title = Instance.new("TextLabel")
-Title.Size = UDim2.new(1,-44,0,34)
+Title.Size = UDim2.new(1,-74,0,34)
 Title.Position = UDim2.fromOffset(12,4)
 Title.BackgroundTransparency = 1
-Title.Text = "CoinClicker v32"
+Title.Text = "CoinClicker v33"
 Title.TextColor3 = Color3.new(1,1,1)
 Title.Font = Enum.Font.GothamBold
 Title.TextSize = 16
 Title.TextXAlignment = Enum.TextXAlignment.Left
 Title.Parent = Main
 
+-- BOTÃO DE FECHAR (×)
 local Close = Instance.new("TextButton")
 Close.Size = UDim2.fromOffset(28,28)
 Close.Position = UDim2.new(1,-34,0,5)
@@ -485,6 +484,17 @@ Close.TextColor3 = Color3.fromRGB(255,110,110)
 Close.Font = Enum.Font.GothamBold
 Close.TextSize = 20
 Close.Parent = Main
+
+-- BOTÃO DE MINIMIZAR (-)
+local Minimize = Instance.new("TextButton")
+Minimize.Size = UDim2.fromOffset(28,28)
+Minimize.Position = UDim2.new(1,-64,0,5)
+Minimize.BackgroundTransparency = 1
+Minimize.Text = "-"
+Minimize.TextColor3 = Color3.new(1,1,1)
+Minimize.Font = Enum.Font.GothamBold
+Minimize.TextSize = 24
+Minimize.Parent = Main
 
 local Status = Instance.new("TextLabel")
 Status.Size = UDim2.new(1,-24,0,18)
@@ -506,6 +516,19 @@ Holder.Parent = Main
 local Layout = Instance.new("UIListLayout")
 Layout.Padding = UDim.new(0,7)
 Layout.Parent = Holder
+
+-- LÓGICA DO MINIMIZAR
+local isMinimized = false
+Minimize.Activated:Connect(function()
+    isMinimized = not isMinimized
+    if isMinimized then
+        Main.Size = UDim2.fromOffset(265, 42)
+        Minimize.Text = "+"
+    else
+        Main.Size = UDim2.fromOffset(265, 375)
+        Minimize.Text = "-"
+    end
+end)
 
 local function toggle(label, key)
     local B = Instance.new("TextButton")
@@ -590,7 +613,7 @@ connection = RunService.Heartbeat:Connect(function()
             local remainingClick = math.ceil(State.TargetClickTime - elapsed)
             
             if now < State.MicroPauseEnd then
-                Status.Text = "Clicando... (Pausa rápida)"
+                Status.Text = "Clicando... (Pausa)"
             else
                 if math.random(1, 1000) <= 10 then
                     State.MicroPauseEnd = now + (math.random(15, 35) / 100)
@@ -605,16 +628,16 @@ connection = RunService.Heartbeat:Connect(function()
                     local big = getBigCoin()
                     if big then
                         press(big, true)
-                        Status.Text = "Clicando Rápido... (" .. remainingClick .. "s)"
+                        Status.Text = "Clicando... (" .. remainingClick .. "s)"
                     else
                         cachedBigCoin = nil
-                        Status.Text = "Aguardando Item Equipado..."
+                        Status.Text = "Aguardando Item..."
                     end
                 end
             end
         else
             local remainingRest = math.ceil(totalCycle - elapsed)
-            Status.Text = "Stamina: Descansando (" .. remainingRest .. "s)"
+            Status.Text = "Descansando (" .. remainingRest .. "s)"
             
             if remainingRest == 1 then
                 State.TargetClickTime = math.random(48, 52)
