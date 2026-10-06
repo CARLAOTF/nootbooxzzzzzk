@@ -1,7 +1,7 @@
--- CoinClicker v28 - Auto Golden com Clique de Mouse & Tempo Ajustado (1-4s)
--- [1] Auto Golden usa simulação física de clique de mouse via VirtualInputManager
--- [2] Intervalo do Auto Golden ajustado para 1 a 4 segundos
--- [3] AutoClick rápido + humanizado e Anti-AFK mantidos
+-- CoinClicker v29 - Auto Equip Tool Adicionado
+-- [1] Auto Equip procura e equipa o item "CoinClicker" do inventário automaticamente.
+-- [2] Auto Golden usa simulação física de clique de mouse (1 a 4s).
+-- [3] AutoClick rápido + humanizado e Anti-AFK mantidos.
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -24,6 +24,7 @@ local State = {
     AutoBuff = false,
     AutoWrinkler = false,
     AutoGolden = false,
+    AutoEquip = false,
     CompactView = false,
     
     LastClick = 0,
@@ -39,6 +40,7 @@ local State = {
     NextBuffTime = 0,
     NextWrinklerTime = 0,
     NextGoldenTime = 0,
+    NextEquipCheck = 0,
 }
 
 local function getRandomHumanDelay()
@@ -94,7 +96,6 @@ local function press(button, allowHidden)
     return pcall(function() button:Activate() end)
 end
 
--- Clique Físico de Mouse na posição exata da UI
 local function mouseClickButton(button)
     if not button or not visible(button) then return false end
     
@@ -102,13 +103,12 @@ local function mouseClickButton(button)
     local pos = button.AbsolutePosition
     local size = button.AbsoluteSize
     
-    -- Calcula centro do botão com pequena variação humana (+- 3 pixels)
     local x = pos.X + (size.X / 2) + math.random(-3, 3)
     local y = pos.Y + (size.Y / 2) + inset.Y + math.random(-3, 3)
     
     local success = pcall(function()
         VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
-        task.wait(math.random(35, 75) / 1000) -- tempo do toque
+        task.wait(math.random(35, 75) / 1000)
         VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
     end)
     
@@ -171,7 +171,7 @@ local function greenStroke(obj)
 end
 
 --==================================================
--- CACHE DA MOEDA
+-- CACHE DA MOEDA & FERRAMENTA
 --==================================================
 local cachedBigCoin = nil
 
@@ -239,6 +239,24 @@ local function getBigCoin()
     end
     cachedBigCoin = findBigCoin()
     return cachedBigCoin
+end
+
+local function autoEquipTool()
+    local char = player.Character
+    if not char then return end
+    
+    if char:FindFirstChild("CoinClicker") then return end
+    
+    local backpack = player:FindFirstChild("Backpack")
+    if backpack then
+        local tool = backpack:FindFirstChild("CoinClicker")
+        if tool then
+            local humanoid = char:FindFirstChildOfClass("Humanoid")
+            if humanoid then
+                humanoid:EquipTool(tool)
+            end
+        end
+    end
 end
 
 --==================================================
@@ -383,19 +401,19 @@ end
 --==================================================
 -- INTERFACE (HUB)
 --==================================================
-local old = playerGui:FindFirstChild("CoinClickerV28")
+local old = playerGui:FindFirstChild("CoinClickerV29")
 if old then old:Destroy() end
 
 local Gui = Instance.new("ScreenGui")
-Gui.Name = "CoinClickerV28"
+Gui.Name = "CoinClickerV29"
 Gui.ResetOnSpawn = false
 Gui.IgnoreGuiInset = true
 Gui.DisplayOrder = 1000
 Gui.Parent = playerGui
 
 local Main = Instance.new("Frame")
-Main.Size = UDim2.fromOffset(265, 330)
-Main.Position = UDim2.new(0.5, -132, 0.5, -165)
+Main.Size = UDim2.fromOffset(265, 375)
+Main.Position = UDim2.new(0.5, -132, 0.5, -187)
 Main.BackgroundColor3 = Color3.fromRGB(18,15,27)
 Main.BorderSizePixel = 0
 Main.Active = true
@@ -412,7 +430,7 @@ local Title = Instance.new("TextLabel")
 Title.Size = UDim2.new(1,-44,0,34)
 Title.Position = UDim2.fromOffset(12,4)
 Title.BackgroundTransparency = 1
-Title.Text = "CoinClicker v28"
+Title.Text = "CoinClicker v29"
 Title.TextColor3 = Color3.new(1,1,1)
 Title.Font = Enum.Font.GothamBold
 Title.TextSize = 16
@@ -501,6 +519,7 @@ toggle("Auto Comprar Itens", "AutoItems")
 toggle("Auto Buff / Upgrades", "AutoBuff")
 toggle("Auto Wrinklers", "AutoWrinkler")
 toggle("Auto Golden", "AutoGolden")
+toggle("Auto Equip Item", "AutoEquip")
 toggle("Compact View", "CompactView")
 
 --==================================================
@@ -510,6 +529,12 @@ local connection
 connection = RunService.Heartbeat:Connect(function()
     if not State.Running then return end
     local now = os.clock()
+    
+    -- AUTO EQUIP
+    if State.AutoEquip and now >= State.NextEquipCheck then
+        State.NextEquipCheck = now + 1 -- Checa a cada 1 segundo para não sobrecarregar
+        autoEquipTool()
+    end
     
     -- AUTOCLICK RÁPIDO & HUMANIZADO
     if State.AutoClick then
@@ -544,7 +569,7 @@ connection = RunService.Heartbeat:Connect(function()
                         Status.Text = "Clicando Rápido... (" .. remainingClick .. "s restantes)"
                     else
                         cachedBigCoin = nil
-                        Status.Text = "Procurando moeda..."
+                        Status.Text = "Aguardando Item Equipado..."
                     end
                 end
             end
@@ -598,5 +623,4 @@ local function stop()
 end
 
 Close.Activated:Connect(stop)
-print("[CoinClicker v28] Auto Golden seguro + Mouse Clicks carregado.")
-
+print("[CoinClicker v29] Auto Equip ativado.")
