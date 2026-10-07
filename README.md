@@ -1,14 +1,11 @@
--- CoinClicker v33 - Auto Screen Click & Minimize UI (Corrigido)
--- [1] Monitora quando o "CoinClicker" entra na mão (Character).
--- [2] Executa a ativação direta do item e o clique na área segura da tela.
--- [3] Botão de minimizar (-) mantido.
-
+-- CoinClicker v33.1 - Correção Definitiva para PC
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local VirtualUser = game:GetService("VirtualUser")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local GuiService = game:GetService("GuiService")
 local Workspace = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
@@ -54,28 +51,21 @@ local function getGoldenDelay()
 end
 
 --==================================================
--- DETECÇÃO E CLIQUE EM ÁREA SEGURA (CORRIGIDO)
+-- CLIQUE SEGURO (OTIMIZADO PARA PC)
 --==================================================
 local function clickSafeScreenArea(tool)
-    -- Espera a animação do Roblox terminar de equipar o item
     task.wait(0.6)
-    
-    -- Método 1: Ativação direta via engine do Roblox (Mais seguro)
     if tool and tool:IsA("Tool") and tool.Parent == player.Character then
-        pcall(function()
-            tool:Activate()
-        end)
+        pcall(function() tool:Activate() end)
     end
     
-    -- Método 2: Clique físico na tela ajustado abaixo da barra do Roblox
     local camera = Workspace.CurrentCamera
     if not camera then return end
     
     local viewport = camera.ViewportSize
     local inset = GuiService:GetGuiInset()
-    
     local safeX = viewport.X / 2
-    local safeY = (viewport.Y * 0.30) + inset.Y -- Descido para 30% da tela para fugir da barra
+    local safeY = (viewport.Y * 0.30) + inset.Y
     
     pcall(function()
         VirtualInputManager:SendMouseButtonEvent(safeX, safeY, 0, true, game, 0)
@@ -86,14 +76,10 @@ end
 
 local function setupCharacterListener(char)
     if not char then return end
-    
-    -- Verifica se já está na mão ao carregar o personagem
     local currentTool = char:FindFirstChild("CoinClicker")
     if currentTool then
         task.spawn(function() clickSafeScreenArea(currentTool) end)
     end
-    
-    -- Escuta quando a ferramenta entrar no personagem
     char.ChildAdded:Connect(function(child)
         if child:IsA("Tool") and child.Name == "CoinClicker" then
             task.spawn(function() clickSafeScreenArea(child) end)
@@ -107,7 +93,7 @@ end
 player.CharacterAdded:Connect(setupCharacterListener)
 
 --==================================================
--- FUNÇÕES DE SUPORTE
+-- FUNÇÕES DE SUPORTE E CLIQUE ROBUSTO PARA PC
 --==================================================
 local function parseNumber(text)
     if not text or text == "" then return 0 end
@@ -137,40 +123,59 @@ local function visible(obj)
     return true
 end
 
+-- CORREÇÃO PRINCIPAL DE CLIQUE PARA PC (Usa getconnections + firesignal + Activate)
 local function press(button, allowHidden)
     if not button or not button:IsA("GuiButton") then return false end
     if not allowHidden and not visible(button) then return false end
 
+    -- 1. Tenta getconnections (Crucial para executores de PC)
+    if type(getconnections) == "function" then
+        local fired = false
+        pcall(function()
+            for _, conn in pairs(getconnections(button.Activated)) do
+                conn:Fire()
+                fired = true
+            end
+        end)
+        pcall(function()
+            for _, conn in pairs(getconnections(button.MouseButton1Click)) do
+                conn:Fire()
+                fired = true
+            end
+        end)
+        if fired then return true end
+    end
+
+    -- 2. Tenta firesignal
     if type(firesignal) == "function" then
         local ok1 = pcall(firesignal, button.Activated)
         local ok2 = pcall(firesignal, button.MouseButton1Click)
-        return ok1 or ok2
+        if ok1 or ok2 then return true end
     end
 
-    if not visible(button) then return false end
+    -- 3. Fallback nativo
     return pcall(function() button:Activate() end)
 end
 
 local function mouseClickButton(button)
     if not button or not visible(button) then return false end
     
+    -- Tenta o clique lógico via script primeiro (não rouba o mouse do PC)
+    if press(button) then return true end
+    
+    -- Fallback físico via VirtualInputManager
     local inset = GuiService:GetGuiInset()
     local pos = button.AbsolutePosition
     local size = button.AbsoluteSize
     
-    local x = pos.X + (size.X / 2) + math.random(-3, 3)
-    local y = pos.Y + (size.Y / 2) + inset.Y + math.random(-3, 3)
+    local x = pos.X + (size.X / 2)
+    local y = pos.Y + (size.Y / 2) + inset.Y
     
-    local success = pcall(function()
+    return pcall(function()
         VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
-        task.wait(math.random(35, 75) / 1000)
+        task.wait(0.04)
         VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
     end)
-    
-    if not success then
-        return press(button)
-    end
-    return true
 end
 
 local function findFrame(name)
@@ -260,7 +265,6 @@ local function findBigCoin()
     if not gui then return nil end
 
     local middle = gui:FindFirstChild("MiddleColumn", true)
-
     if middle then
         for _, obj in ipairs(middle:GetDescendants()) do
             if obj:IsA("GuiButton") and nameLooksLikeCoin(obj) then return obj end
@@ -299,17 +303,13 @@ end
 local function autoEquipTool()
     local char = player.Character
     if not char then return end
-    
     if char:FindFirstChild("CoinClicker") then return end
-    
     local backpack = player:FindFirstChild("Backpack")
     if backpack then
         local tool = backpack:FindFirstChild("CoinClicker")
         if tool then
             local humanoid = char:FindFirstChildOfClass("Humanoid")
-            if humanoid then
-                humanoid:EquipTool(tool)
-            end
+            if humanoid then humanoid:EquipTool(tool) end
         end
     end
 end
@@ -383,9 +383,7 @@ local function clickGoldens()
     if not goldens then return 0 end
     local count = 0
     for _, button in ipairs(allButtons(goldens)) do
-        if mouseClickButton(button) then
-            count += 1
-        end
+        if mouseClickButton(button) then count += 1 end
     end
     return count
 end
@@ -454,7 +452,7 @@ local function applyCompact()
 end
 
 --==================================================
--- INTERFACE (HUB)
+-- INTERFACE (HUB COM ARRASTE SEGURO PARA PC)
 --==================================================
 local old = playerGui:FindFirstChild("CoinClickerV33")
 if old then old:Destroy() end
@@ -472,10 +470,37 @@ Main.Position = UDim2.new(0.5, -132, 0.5, -187)
 Main.BackgroundColor3 = Color3.fromRGB(18,15,27)
 Main.BorderSizePixel = 0
 Main.Active = true
-Main.Draggable = true
 Main.ClipsDescendants = true
 Main.Parent = Gui
 Instance.new("UICorner", Main).CornerRadius = UDim.new(0,12)
+
+-- SISTEMA DE ARRASTE NATIVO PARA PC (Substitui o .Draggable que buga no PC)
+local dragging, dragInput, dragStart, startPos
+Main.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = Main.Position
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
+    end
+end)
+
+Main.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+        dragInput = input
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if input == dragInput and dragging then
+        local delta = input.Position - dragStart
+        Main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
 
 local Stroke = Instance.new("UIStroke")
 Stroke.Thickness = 2
@@ -486,14 +511,13 @@ local Title = Instance.new("TextLabel")
 Title.Size = UDim2.new(1,-74,0,34)
 Title.Position = UDim2.fromOffset(12,4)
 Title.BackgroundTransparency = 1
-Title.Text = "CoinClicker v33"
+Title.Text = "CoinClicker v33.1"
 Title.TextColor3 = Color3.new(1,1,1)
 Title.Font = Enum.Font.GothamBold
 Title.TextSize = 16
 Title.TextXAlignment = Enum.TextXAlignment.Left
 Title.Parent = Main
 
--- BOTÃO DE FECHAR (×)
 local Close = Instance.new("TextButton")
 Close.Size = UDim2.fromOffset(28,28)
 Close.Position = UDim2.new(1,-34,0,5)
@@ -504,7 +528,6 @@ Close.Font = Enum.Font.GothamBold
 Close.TextSize = 20
 Close.Parent = Main
 
--- BOTÃO DE MINIMIZAR (-)
 local Minimize = Instance.new("TextButton")
 Minimize.Size = UDim2.fromOffset(28,28)
 Minimize.Position = UDim2.new(1,-64,0,5)
@@ -536,7 +559,6 @@ local Layout = Instance.new("UIListLayout")
 Layout.Padding = UDim.new(0,7)
 Layout.Parent = Holder
 
--- LÓGICA DO MINIMIZAR
 local isMinimized = false
 Minimize.Activated:Connect(function()
     isMinimized = not isMinimized
@@ -611,13 +633,11 @@ connection = RunService.Heartbeat:Connect(function()
     if not State.Running then return end
     local now = os.clock()
     
-    -- AUTO EQUIP
     if State.AutoEquip and now >= State.NextEquipCheck then
         State.NextEquipCheck = now + 1
         autoEquipTool()
     end
     
-    -- AUTOCLICK
     if State.AutoClick then
         if State.StaminaStart == 0 then
             State.StaminaStart = now
@@ -665,7 +685,6 @@ connection = RunService.Heartbeat:Connect(function()
         end
     end
     
-    -- AUTOMAÇÕES DE COMPRA
     if State.AutoItems and now >= State.NextItemTime then
         State.NextItemTime = now + getRandomHumanDelay()
         buyBestGenerator()
