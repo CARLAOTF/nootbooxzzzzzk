@@ -1,722 +1,2302 @@
--- CoinClicker v33.1 - Correção Definitiva para PC
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local VirtualUser = game:GetService("VirtualUser")
-local VirtualInputManager = game:GetService("VirtualInputManager")
-local GuiService = game:GetService("GuiService")
-local Workspace = game:GetService("Workspace")
+local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+
+local LOG_PREFIX = "[Auto Laptop Pro]"
+print(LOG_PREFIX, "Carregando...")
+
+assert(
+	type(getgenv) == "function"
+		and type(getconnections) == "function"
+		and type(firesignal) == "function"
+		and type(debug.getupvalues) == "function",
+	"Executor sem suporte a introspecção de conexões"
+)
 
 local player = Players.LocalPlayer
-local playerGui = player:WaitForChild("PlayerGui")
+local playerGui = player:WaitForChild("PlayerGui", 10)
+assert(playerGui, "PlayerGui indisponível")
 
--- Anti-AFK
-player.Idled:Connect(function()
-    VirtualUser:CaptureController()
-    VirtualUser:ClickButton2(Vector2.new())
-end)
+local featuresFolder = ReplicatedStorage:WaitForChild("Features", 10)
+local feature = featuresFolder and featuresFolder:FindFirstChild("CoinClicker")
+assert(feature, "Coin Clicker não encontrado")
 
-local State = {
-    Running = true,
-    AutoClick = false,
-    AutoItems = false,
-    AutoBuff = false,
-    AutoWrinkler = false,
-    AutoGolden = false,
-    AutoEquip = false,
-    CompactView = false,
-    
-    LastClick = 0,
-    LastCompact = 0,
-    
-    StaminaStart = 0,
-    TargetClickTime = 50,
-    TargetRestTime = 70,
-    NextClickDelay = 0.02,
-    MicroPauseEnd = 0,
-    
-    NextItemTime = 0,
-    NextBuffTime = 0,
-    NextWrinklerTime = 0,
-    NextGoldenTime = 0,
-    NextEquipCheck = 0,
+local vide = require(ReplicatedStorage.Packages.vide)
+local Catalog = require(feature.Catalog)
+local Upgrades = require(feature.Upgrades)
+local Fortunes = require(feature.Fortunes)
+local Achievements = require(feature.Achievements)
+local Engine = require(feature.Engine)
+local SettingsFactory = require(feature.Settings)
+local ServerBackend = require(feature.Drivers.ServerBackend)
+
+-- Constants
+
+local SESSION_KEY = "AutoLaptop"
+local GUI_NAME = "AutoLaptop"
+local GAME_GUI_NAME = "CoinClickerGui"
+
+local MAX_FAILURES = 3
+local MAX_LOGS = 24
+local VISIBLE_LOGS = 9
+local CHART_SAMPLES = 24
+local SAMPLE_WINDOW = 8
+local PENDING_TIMEOUT = 8
+local COLLECT_TICK = 0.05
+local REACTION_DELAY = NumberRange.new(0.45, 1.3)
+local CLICK_GAP = NumberRange.new(0.04, 0.08) -- Cadência humanizada para o autoclick
+local HESITATION = NumberRange.new(0.4, 1.2)
+local HESITATION_CHANCE = 0.12
+local WRINKLER_JITTER = 0.15
+local WRINKLER_WINDOW = 15
+local PLAN_INTERVAL = 0.45
+local SAVE_ADVANTAGE = 1.08
+local UPGRADE_SLOTS = 12
+local PANEL_TRANSPARENCY = 0.15
+local SCREEN_COVERAGE = 0.9
+local COMPACT_SCALE_NAME = "AutoLaptopScale"
+local DRAG_THRESHOLD = 6
+
+local WINDOW_SIZE = Vector2.new(780, 540)
+local SIDEBAR_WIDTH = 176
+
+local STRATEGIES = { "Lucro", "Mais barato", "Desbloquear" }
+local STRATEGY_HINTS = {
+	Lucro = "Compara o ganho passivo e o ganho dos cliques.",
+	["Mais barato"] = "Prioriza a opção com menor preço.",
+	Desbloquear = "Prioriza tipos ainda não comprados; depois, retorno.",
 }
 
-local function getRandomHumanDelay()
-    return math.random(100, 900) / 100
+local AUTO_SPELL_ORDER = { "handOfFate", "sleightOfHand", "packedHouse", "conjure" }
+local SPELL_NAMES = {
+	auto = "Combo inteligente",
+	conjure = "Conjurar moedas",
+	stretchTime = "Estender buffs",
+	resurrect = "Invocar wrinkler",
+	handOfFate = "Moeda dourada",
+	sleightOfHand = "Clique x25",
+	packedHouse = "Produção x5",
+	edifice = "Criar edifício",
+}
+
+local GENERATOR_NAMES = {
+	Finger = "Dedo",
+	StickyNote = "Nota pegajosa",
+	Wallet = "Carteira",
+	Coffee = "Café gelado",
+	PlantPot = "Vaso de plantas",
+	SignBoard = "Placa",
+	Pizza = "Festa da pizza",
+	Boombox = "Boombox",
+	Dumbbell = "Ginásio",
+	Vacuum = "Aspirador",
+	Megaphone = "Microfone",
+	CrystalBall = "Bola de cristal",
+	Compass = "Bússola",
+	Camera = "Cabine de fotos",
+}
+
+local REDUCED_EFFECTS = { particles = 0, backgroundCoins = 0, floatingNumbers = false, clickSound = false }
+
+local AUTOMATION_KEYS = {
+	"MouseClickSpam", "AutoExtraUI", "AutoBuy", "AutoUpgrade", "AutoGolden",
+	"AutoLump", "AutoMarket", "AutoWrinkler", "AutoReward", "AutoSpell",
+}
+
+local NUMBER_SUFFIXES = { "", "K", "M", "B", "T", "Qa", "Qi", "Sx" }
+
+-- Janitor
+
+local Janitor = {}
+Janitor.__index = Janitor
+
+function Janitor.new()
+	return setmetatable({ tasks = {} }, Janitor)
 end
 
-local function getGoldenDelay()
-    return math.random(100, 400) / 100
+function Janitor:add(task)
+	table.insert(self.tasks, task)
+	return task
 end
 
---==================================================
--- CLIQUE SEGURO (OTIMIZADO PARA PC)
---==================================================
-local function clickSafeScreenArea(tool)
-    task.wait(0.6)
-    if tool and tool:IsA("Tool") and tool.Parent == player.Character then
-        pcall(function() tool:Activate() end)
-    end
-    
-    local camera = Workspace.CurrentCamera
-    if not camera then return end
-    
-    local viewport = camera.ViewportSize
-    local inset = GuiService:GetGuiInset()
-    local safeX = viewport.X / 2
-    local safeY = (viewport.Y * 0.30) + inset.Y
-    
-    pcall(function()
-        VirtualInputManager:SendMouseButtonEvent(safeX, safeY, 0, true, game, 0)
-        task.wait(0.08)
-        VirtualInputManager:SendMouseButtonEvent(safeX, safeY, 0, false, game, 0)
-    end)
+function Janitor:connect(signal, callback)
+	return self:add(signal:Connect(callback))
 end
 
-local function setupCharacterListener(char)
-    if not char then return end
-    local currentTool = char:FindFirstChild("CoinClicker")
-    if currentTool then
-        task.spawn(function() clickSafeScreenArea(currentTool) end)
-    end
-    char.ChildAdded:Connect(function(child)
-        if child:IsA("Tool") and child.Name == "CoinClicker" then
-            task.spawn(function() clickSafeScreenArea(child) end)
-        end
-    end)
+function Janitor:clean()
+	local tasks = self.tasks
+	self.tasks = {}
+	for index = #tasks, 1, -1 do
+		local task = tasks[index]
+		local kind = typeof(task)
+		if kind == "RBXScriptConnection" then
+			task:Disconnect()
+		elseif kind == "Instance" then
+			pcall(task.Destroy, task)
+		elseif kind == "function" then
+			pcall(task)
+		elseif kind == "table" then
+			pcall(task.clean, task)
+		end
+	end
 end
 
-if player.Character then
-    setupCharacterListener(player.Character)
-end
-player.CharacterAdded:Connect(setupCharacterListener)
+-- Session
 
---==================================================
--- FUNÇÕES DE SUPORTE E CLIQUE ROBUSTO PARA PC
---==================================================
-local function parseNumber(text)
-    if not text or text == "" then return 0 end
-    text = string.lower(text)
-    local valStr, suffix = string.match(text, "(%d+%.?%d*)%s*([kmbt]?)")
-    if not valStr then return 0 end
-    local num = tonumber(valStr) or 0
-    if suffix == "k" then num *= 1e3
-    elseif suffix == "m" then num *= 1e6
-    elseif suffix == "b" then num *= 1e9
-    elseif suffix == "t" then num *= 1e12
-    end
-    return num
+local env = getgenv()
+local previousSession = env[SESSION_KEY]
+if type(previousSession) == "table" and type(previousSession.Stop) == "function" then
+	pcall(previousSession.Stop)
 end
 
-local function getGui()
-    return playerGui:FindFirstChild("CoinClickerGui")
+local staleGui = playerGui:FindFirstChild(GUI_NAME)
+if staleGui then
+	staleGui:Destroy()
 end
 
-local function visible(obj)
-    if not obj or not obj:IsA("GuiObject") or not obj.Visible then return false end
-    local p = obj.Parent
-    while p and p ~= playerGui do
-        if p:IsA("GuiObject") and not p.Visible then return false end
-        p = p.Parent
-    end
-    return true
+local janitor = Janitor.new()
+local running = true
+local session = {}
+
+function session.Stop()
+	if not running then
+		return
+	end
+	running = false
+	janitor:clean()
+	if env[SESSION_KEY] == session then
+		env[SESSION_KEY] = nil
+	end
+	print(LOG_PREFIX, "Descarregado: interface, conexões e backend removidos.")
 end
 
--- CORREÇÃO PRINCIPAL DE CLIQUE PARA PC (Usa getconnections + firesignal + Activate)
-local function press(button, allowHidden)
-    if not button or not button:IsA("GuiButton") then return false end
-    if not allowHidden and not visible(button) then return false end
+env[SESSION_KEY] = session
 
-    -- 1. Tenta getconnections (Crucial para executores de PC)
-    if type(getconnections) == "function" then
-        local fired = false
-        pcall(function()
-            for _, conn in pairs(getconnections(button.Activated)) do
-                conn:Fire()
-                fired = true
-            end
-        end)
-        pcall(function()
-            for _, conn in pairs(getconnections(button.MouseButton1Click)) do
-                conn:Fire()
-                fired = true
-            end
-        end)
-        if fired then return true end
-    end
+-- State
 
-    -- 2. Tenta firesignal
-    if type(firesignal) == "function" then
-        local ok1 = pcall(firesignal, button.Activated)
-        local ok2 = pcall(firesignal, button.MouseButton1Click)
-        if ok1 or ok2 then return true end
-    end
+local Config = {
+	MouseClickSpam = true,
+	TargetCPS = 18,
+	StaminaGuard = true,
+	MinStamina = 15,
+	ResumeStamina = 60,
+	Performance = true,
+	CompactView = false,
+	CompactScale = 0.75,
+	AutoBuy = true,
+	AutoUpgrade = true,
+	SaveMode = true,
+	MaxSaveSeconds = 900,
+	Strategy = "Lucro",
+	AutoExtraUI = true,
+	AutoGolden = true,
+	AutoLump = true,
+	AutoMarket = true,
+	AutoReward = true,
+	AutoWrinkler = true,
+	WrinklerInterval = 30,
+	AutoSpell = true,
+	Spell = "auto",
+	Paused = true,
+	Verbose = false,
+}
 
-    -- 3. Fallback nativo
-    return pcall(function() button:Activate() end)
+local counters = {
+	simulatedClicks = 0,
+	extraClicks = 0,
+	buildings = 0,
+	upgrades = 0,
+	rares = 0,
+	goldens = 0,
+	harvests = 0,
+	wrinklers = 0,
+	spells = 0,
+}
+
+local server = {
+	rate = 0,
+	income = 0,
+	coins = nil,
+	syncedAt = nil,
+	syncCount = 0,
+	confirmed = 0,
+	rejected = 0,
+	chartedAt = 0,
+	samples = {},
+	history = {},
+}
+
+local pending = {}
+local logs = {}
+local failures = {}
+local optionListeners = {}
+local startedAt = os.clock()
+
+-- Utilities
+
+local function formatNumber(value)
+	value = tonumber(value) or 0
+	if value ~= value then
+		return "0"
+	end
+	if math.abs(value) == math.huge then
+		return if value > 0 then "∞" else "-∞"
+	end
+	local magnitude, tier = math.abs(value), 1
+	while magnitude >= 1000 and tier < #NUMBER_SUFFIXES do
+		magnitude /= 1000
+		tier += 1
+	end
+	if magnitude >= 1000 then
+		return string.format("%.2e", value)
+	end
+	local signed = if value < 0 then -magnitude else magnitude
+	if tier == 1 then
+		return (string.format("%.1f", signed):gsub("%.0$", ""))
+	end
+	return string.format("%.2f%s", signed, NUMBER_SUFFIXES[tier])
 end
 
-local function mouseClickButton(button)
-    if not button or not visible(button) then return false end
-    
-    -- Tenta o clique lógico via script primeiro (não rouba o mouse do PC)
-    if press(button) then return true end
-    
-    -- Fallback físico via VirtualInputManager
-    local inset = GuiService:GetGuiInset()
-    local pos = button.AbsolutePosition
-    local size = button.AbsoluteSize
-    
-    local x = pos.X + (size.X / 2)
-    local y = pos.Y + (size.Y / 2) + inset.Y
-    
-    return pcall(function()
-        VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
-        task.wait(0.04)
-        VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
-    end)
+local function formatDuration(seconds)
+	return string.format("%d min %d s", math.floor(seconds / 60), math.floor(seconds % 60))
 end
 
-local function findFrame(name)
-    local gui = getGui()
-    if not gui then return nil end
-    return gui:FindFirstChild(name, true)
+local function nextInList(list, current)
+	local index = table.find(list, current) or 0
+	return list[index % #list + 1]
 end
 
-local FrameCache = {}
-local function getFrame(name)
-    local cached = FrameCache[name]
-    if cached and cached.Parent then return cached end
-    cached = findFrame(name)
-    FrameCache[name] = cached
-    return cached
+local function generatorName(generator)
+	return GENERATOR_NAMES[generator.id] or generator.name
 end
 
-local function allButtons(root)
-    local result = {}
-    if not root then return result end
-    if root:IsA("GuiButton") and visible(root) then table.insert(result, root) end
-    for _, obj in ipairs(root:GetDescendants()) do
-        if obj:IsA("GuiButton") and visible(obj) then table.insert(result, obj) end
-    end
-    return result
+local function log(message, isError)
+	local elapsed = os.clock() - startedAt
+	table.insert(logs, 1, string.format("%02d:%02d  %s", math.floor(elapsed / 60), math.floor(elapsed % 60), message))
+	if #logs > MAX_LOGS then
+		table.remove(logs)
+	end
+	if isError then
+		warn(LOG_PREFIX, message)
+	elseif Config.Verbose then
+		print(LOG_PREFIX, message)
+	end
 end
 
-local function textOf(obj)
-    local parts = {}
-    if obj:IsA("TextButton") and obj.Text ~= "" then table.insert(parts, obj.Text) end
-    for _, d in ipairs(obj:GetDescendants()) do
-        if (d:IsA("TextLabel") or d:IsA("TextButton")) and d.Text ~= "" then
-            table.insert(parts, d.Text)
-        end
-    end
-    return string.lower(table.concat(parts, " "))
+local function attempt(name, callback, ...)
+	local ok, err = pcall(callback, ...)
+	if ok then
+		failures[name] = 0
+		return true
+	end
+	failures[name] = (failures[name] or 0) + 1
+	if failures[name] == 1 then
+		log(name .. ": " .. tostring(err):sub(1, 170), true)
+	end
+	return false
 end
 
-local function greenStroke(obj)
-    local function green(c)
-        return c.G > c.R * 1.08 and c.G > c.B * 1.02 and c.G > 0.4
-    end
-    for _, d in ipairs(obj:GetDescendants()) do
-        if d:IsA("UIStroke") and d.Enabled and green(d.Color) then return true end
-    end
-    local p = obj.Parent
-    if p then
-        for _, d in ipairs(p:GetChildren()) do
-            if d:IsA("UIStroke") and d.Enabled and green(d.Color) then return true end
-        end
-    end
-    return false
+local function setOption(key, value)
+	Config[key] = value
+	for _, listener in optionListeners[key] or {} do
+		listener(value)
+	end
 end
 
---==================================================
--- CACHE DA MOEDA & FERRAMENTA
---==================================================
-local cachedBigCoin = nil
-
-local function nameLooksLikeCoin(obj)
-    local n = string.lower(obj.Name)
-    return string.find(n, "bigcoin", 1, true)
-        or n == "coin"
-        or n == "coinbutton"
-        or string.find(n, "click", 1, true)
+local function onOption(key, listener)
+	optionListeners[key] = optionListeners[key] or {}
+	table.insert(optionListeners[key], listener)
+	listener(Config[key])
 end
 
-local function underBlockedSection(obj)
-    local p = obj.Parent
-    while p and p ~= playerGui do
-        local n = string.lower(p.Name)
-        if string.find(n, "wrinkler", 1, true)
-            or string.find(n, "golden", 1, true)
-            or string.find(n, "store", 1, true)
-            or string.find(n, "upgrade", 1, true)
-            or string.find(n, "generator", 1, true)
-        then
-            return true
-        end
-        p = p.Parent
-    end
-    return false
+local function togglePause()
+	setOption("Paused", not Config.Paused)
+	log(if Config.Paused then "Automações pausadas" else "Automações retomadas")
 end
 
-local function findBigCoin()
-    local gui = getGui()
-    if not gui then return nil end
+-- Backend
 
-    local middle = gui:FindFirstChild("MiddleColumn", true)
-    if middle then
-        for _, obj in ipairs(middle:GetDescendants()) do
-            if obj:IsA("GuiButton") and nameLooksLikeCoin(obj) then return obj end
-        end
-    end
+local backendJanitor = janitor:add(Janitor.new())
+local driver, gameSettings, defaultEffects, viewState, appliedPerformance
 
-    for _, obj in ipairs(gui:GetDescendants()) do
-        if obj:IsA("GuiButton") and nameLooksLikeCoin(obj) and not underBlockedSection(obj) then
-            return obj
-        end
-    end
-
-    local root = middle or gui
-    local best, bestArea = nil, 0
-    for _, obj in ipairs(root:GetDescendants()) do
-        if obj:IsA("GuiButton") and not underBlockedSection(obj) then
-            local s = obj.AbsoluteSize
-            local area = s.X * s.Y
-            if area > bestArea then
-                best = obj
-                bestArea = area
-            end
-        end
-    end
-    return best
+local function ready()
+	return driver ~= nil and driver.ready()
 end
 
-local function getBigCoin()
-    if cachedBigCoin and cachedBigCoin.Parent and cachedBigCoin:IsDescendantOf(playerGui) then
-        return cachedBigCoin
-    end
-    cachedBigCoin = findBigCoin()
-    return cachedBigCoin
+local function findViewState(backend)
+	for _, upvalue in debug.getupvalues(backend.buy) do
+		if type(upvalue) == "table" and type(upvalue.hydrate) == "function" and type(upvalue.buy) == "function" then
+			for _, candidate in debug.getupvalues(upvalue.buy) do
+				if type(candidate) == "function" and debug.info(candidate, "n") == "view" then
+					return candidate
+				end
+			end
+		end
+	end
 end
 
-local function autoEquipTool()
-    local char = player.Character
-    if not char then return end
-    if char:FindFirstChild("CoinClicker") then return end
-    local backpack = player:FindFirstChild("Backpack")
-    if backpack then
-        local tool = backpack:FindFirstChild("CoinClicker")
-        if tool then
-            local humanoid = char:FindFirstChildOfClass("Humanoid")
-            if humanoid then humanoid:EquipTool(tool) end
-        end
-    end
+local function applyEffects(reduced)
+	local snapshot = gameSettings.snapshot()
+	for key, value in REDUCED_EFFECTS do
+		snapshot[key] = if reduced then value else defaultEffects[key]
+	end
+	gameSettings.apply(snapshot)
 end
 
---==================================================
--- FUNÇÕES DE AUTOMAÇÃO
---==================================================
-local function buyBestGenerator()
-    local generators = getFrame("Generators")
-    if not generators then return false end
-    local candidates = {}
-    
-    for _, button in ipairs(allButtons(generators)) do
-        local s = button.AbsoluteSize
-        if s.X >= 120 and s.Y >= 32 then
-            local txt = textOf(button)
-            if not string.find(txt, "robux", 1, true) then
-                local price = parseNumber(txt)
-                table.insert(candidates, {
-                    button = button,
-                    price = price,
-                    posY = button.AbsolutePosition.Y,
-                    canBuy = greenStroke(button)
-                })
-            end
-        end
-    end
-    
-    table.sort(candidates, function(a, b)
-        if a.canBuy ~= b.canBuy then return a.canBuy end
-        if a.price > 0 and b.price > 0 and a.price ~= b.price then return a.price > b.price end
-        return a.posY > b.posY
-    end)
-    
-    for _, item in ipairs(candidates) do
-        if item.canBuy and press(item.button) then return true end
-    end
-    return false
+local function restoreEffects()
+	if appliedPerformance == nil then
+		return
+	end
+	applyEffects(false)
+	driver.flushSettings()
 end
 
-local function buyAvailableUpgrade()
-    local upgrades = getFrame("Upgrades")
-    if not upgrades then return false end
-    local candidates = allButtons(upgrades)
-    
-    table.sort(candidates, function(a, b)
-        return a.AbsolutePosition.X < b.AbsolutePosition.X
-    end)
-    
-    for _, button in ipairs(candidates) do
-        if greenStroke(button) and press(button) then return true end
-    end
-    return false
+local function syncPerformance()
+	local reduced = Config.Performance and not Config.Paused
+	if (appliedPerformance == true) == reduced or not ready() then
+		return
+	end
+	applyEffects(reduced)
+	appliedPerformance = reduced
+	log(if reduced then "Desempenho: partículas, números e som desligados" else "Efeitos do jogo restaurados")
 end
 
-local function popWrinklers()
-    local wrinklers = getFrame("Wrinklers")
-    if not wrinklers then return 0 end
-    local count = 0
-    for _, button in ipairs(allButtons(wrinklers)) do
-        local s = button.AbsoluteSize
-        if s.X >= 20 and s.Y >= 20 then
-            if press(button) then count += 1 end
-        end
-    end
-    return count
+local function startBackend()
+	backendJanitor:clean()
+	local settings = SettingsFactory.new()
+	local destroy, backend = vide.root(function()
+		return ServerBackend({
+			settings = settings,
+			coinsPerClick = vide.source(1),
+			timeScale = vide.source(1),
+			particlesPerClick = settings.particles,
+			goldenInterval = vide.source(20),
+			wrinklerInterval = vide.source(25),
+			achievementToasts = settings.achievementToasts,
+			floatingNumbers = settings.floatingNumbers,
+			clickSound = settings.clickSound,
+			backgroundCoins = settings.backgroundCoins,
+		})
+	end)
+	assert(type(destroy) == "function" and type(backend) == "table", "Falha ao iniciar o backend do jogo")
+
+	driver, gameSettings, viewState = backend, settings, findViewState(backend)
+	defaultEffects, appliedPerformance = settings.snapshot(), nil
+	backendJanitor:add(destroy)
+	backendJanitor:add(restoreEffects)
 end
 
-local function clickGoldens()
-    local goldens = getFrame("Goldens")
-    if not goldens then return 0 end
-    local count = 0
-    for _, button in ipairs(allButtons(goldens)) do
-        if mouseClickButton(button) then count += 1 end
-    end
-    return count
+startBackend()
+
+-- Purchases
+
+local indexById = {}
+for index, generator in Catalog.all do
+	indexById[generator.id] = index
 end
 
---==================================================
--- COMPACT VIEW
---==================================================
-local saved = setmetatable({}, {__mode = "k"})
+local planCache, plannedAt = {}, 0
 
-local function remember(obj)
-    if not obj or not obj:IsA("GuiObject") or saved[obj] then return end
-    saved[obj] = {
-        Visible = obj.Visible,
-        Size = obj.Size,
-        Position = obj.Position,
-        AnchorPoint = obj.AnchorPoint,
-        BackgroundTransparency = obj.BackgroundTransparency,
-        Active = obj.Active,
-    }
+local function invalidatePlan()
+	plannedAt = 0
 end
 
-local function restore(obj)
-    local old = saved[obj]
-    if not old or not obj or not obj.Parent then return end
-    obj.Visible = old.Visible
-    obj.Size = old.Size
-    obj.Position = old.Position
-    obj.AnchorPoint = old.AnchorPoint
-    obj.BackgroundTransparency = old.BackgroundTransparency
-    obj.Active = old.Active
+local function trackPending(kind, id, owned)
+	table.insert(pending, { kind = kind, id = id, owned = owned, at = os.clock(), sync = server.syncCount })
 end
 
-local function applyCompact()
-    local gui = getGui()
-    if not gui then return end
-    
-    local main = gui:FindFirstChild("Main", true)
-    local left = gui:FindFirstChild("LeftColumn", true)
-    local middle = gui:FindFirstChild("MiddleColumn", true)
-    local right = gui:FindFirstChild("RightColumn", true)
-    
-    for _, obj in ipairs({main, left, middle, right}) do
-        if obj and obj:IsA("GuiObject") then remember(obj) end
-    end
-    
-    if State.CompactView then
-        if main then main.BackgroundTransparency = 1 main.Active = false end
-        if left then
-            left.Visible = true
-            left.AnchorPoint = Vector2.new(0,0)
-            left.Position = UDim2.fromOffset(0,0)
-            left.Size = UDim2.new(0,270,1,0)
-        end
-        if middle then middle.Visible = false middle.Active = false end
-        if right then
-            right.Visible = true
-            right.AnchorPoint = Vector2.new(1,0)
-            right.Position = UDim2.fromScale(1,0)
-            right.Size = UDim2.new(0,300,1,0)
-        end
-    else
-        for _, obj in ipairs({main, left, middle, right}) do
-            if obj and obj:IsA("GuiObject") then restore(obj) end
-        end
-    end
+local function marketStock()
+	local stock = {}
+	for _, entry in driver.marketStock() do
+		stock[entry.id] = entry.left
+	end
+	return stock
 end
 
---==================================================
--- INTERFACE (HUB COM ARRASTE SEGURO PARA PC)
---==================================================
-local old = playerGui:FindFirstChild("CoinClickerV33")
-if old then old:Destroy() end
+local function canBuyUpgrade(upgrade)
+	return not driver.upgradePurchased(upgrade.id) and driver.upgradeUnlocked(upgrade) and driver.coins() >= upgrade.price
+end
 
-local Gui = Instance.new("ScreenGui")
-Gui.Name = "CoinClickerV33"
-Gui.ResetOnSpawn = false
-Gui.IgnoreGuiInset = true
-Gui.DisplayOrder = 1000
-Gui.Parent = playerGui
+local function availableUpgrades()
+	local available = {}
+	for _, upgrade in Upgrades.list do
+		if not driver.upgradePurchased(upgrade.id) and driver.upgradeUnlocked(upgrade) then
+			table.insert(available, upgrade)
+		end
+	end
+	table.sort(available, function(a, b)
+		return a.price < b.price
+	end)
+	return available
+end
 
-local Main = Instance.new("Frame")
-Main.Size = UDim2.fromOffset(265, 375)
-Main.Position = UDim2.new(0.5, -132, 0.5, -187)
-Main.BackgroundColor3 = Color3.fromRGB(18,15,27)
-Main.BorderSizePixel = 0
-Main.Active = true
-Main.ClipsDescendants = true
-Main.Parent = Gui
-Instance.new("UICorner", Main).CornerRadius = UDim.new(0,12)
+local function buyGenerator(id, rare)
+	local index = indexById[id]
+	if not ready() or not index or driver.coins() < driver.priceAt(index) then
+		return false
+	end
 
--- SISTEMA DE ARRASTE NATIVO PARA PC (Substitui o .Draggable que buga no PC)
-local dragging, dragInput, dragStart, startPos
-Main.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        dragging = true
-        dragStart = input.Position
-        startPos = Main.Position
-        input.Changed:Connect(function()
-            if input.UserInputState == Enum.UserInputState.End then
-                dragging = false
-            end
-        end)
-    end
+	local target = driver.ownedAt(index) + 1
+	local bought
+	if rare then
+		bought = driver.marketBuy(id) and true or false
+	else
+		local amount, selling = driver.buyAmount(), driver.sellMode()
+		driver.buyAmount(1)
+		driver.sellMode(false)
+		local ok, result = pcall(driver.buy, id)
+		driver.buyAmount(amount)
+		driver.sellMode(selling)
+		if not ok then
+			error(result, 0)
+		end
+		bought = result == true
+	end
+
+	if bought then
+		trackPending("building", id, target)
+		if rare then
+			counters.rares += 1
+		else
+			counters.buildings += 1
+		end
+		invalidatePlan()
+	end
+	return bought
+end
+
+local function buyUpgrade(upgrade)
+	if not (ready() and upgrade and canBuyUpgrade(upgrade) and driver.buyUpgrade(upgrade.id)) then
+		return false
+	end
+	trackPending("upgrade", upgrade.id)
+	counters.upgrades += 1
+	invalidatePlan()
+	log("Melhoria enviada: " .. upgrade.name)
+	return true
+end
+
+local function comparePlans(a, b)
+	if Config.Strategy == "Mais barato" and a.cost ~= b.cost then
+		return a.cost < b.cost
+	end
+	if Config.Strategy == "Desbloquear" and a.unowned ~= b.unowned then
+		return a.unowned
+	end
+	if a.roi ~= b.roi then
+		return a.roi < b.roi
+	end
+	return a.cost < b.cost
+end
+
+local function planPurchases(force)
+	if not ready() or not viewState then
+		return {}
+	end
+	local now = os.clock()
+	if not force and now - plannedAt < PLAN_INTERVAL then
+		return planCache
+	end
+	plannedAt = now
+
+	local state = viewState()
+	local clickRate = if Config.MouseClickSpam then math.max(server.rate, Rules.steadyClicksPerSecond) else 0
+	local _, clickMultiplier = Engine.multipliers(state)
+	local summary = Engine.summary(state)
+	local baseClick = math.max(
+		0,
+		(driver.clickValue() / math.max(clickMultiplier, 1e-6) - Engine.baseCps(state) * summary.clickCpsShare)
+			/ 2 ^ summary.clickTiers
+	)
+
+	local function income(candidate)
+		return Engine.coinsPerSecond(candidate) + Engine.clickValue(candidate, baseClick) * clickRate
+	end
+
+	local baseIncome = income(state)
+	local plans = {}
+
+	local function evaluate(kind, id, name, cost, unowned, mutate)
+		local candidate = table.clone(state)
+		candidate.owned = table.clone(state.owned)
+		candidate.purchased = table.clone(state.purchased)
+		mutate(candidate)
+		local gain = income(candidate) - baseIncome
+		table.insert(plans, {
+			kind = kind,
+			id = id,
+			name = name,
+			cost = cost,
+			gain = gain,
+			roi = if gain > 1e-6 then cost / gain else math.huge,
+			unowned = unowned,
+		})
+	end
+
+	local stock = if Config.AutoMarket then marketStock() else {}
+	for index, generator in Catalog.all do
+		local enabled = if generator.rare then (stock[generator.id] or 0) > 0 else Config.AutoBuy
+		if enabled then
+			evaluate(
+				if generator.rare then "rare" else "building",
+				generator.id,
+				generatorName(generator),
+				driver.priceAt(index),
+				driver.ownedAt(index) == 0,
+				function(candidate)
+					candidate.owned[generator.id] = (candidate.owned[generator.id] or 0) + 1
+				end
+			)
+		end
+	end
+
+	if Config.AutoUpgrade then
+		for _, upgrade in availableUpgrades() do
+			evaluate("upgrade", upgrade.id, upgrade.name, upgrade.price, false, function(candidate)
+				candidate.purchased[upgrade.id] = true
+			end)
+		end
+	end
+
+	table.sort(plans, comparePlans)
+	planCache = plans
+	return plans
+end
+
+local function decidePurchase(force)
+	local plans = planPurchases(force)
+	local target = plans[1]
+	if not target then
+		return { action = "idle" }
+	end
+
+	local funds = driver.coins()
+	if target.cost <= funds then
+		return { action = "buy", buy = target, target = target }
+	end
+
+	local affordable
+	for _, plan in plans do
+		if plan.cost <= funds then
+			affordable = plan
+			break
+		end
+	end
+
+	local liveIncome = math.max(0.001, server.income, driver.coinsPerSecond())
+	local wait = (target.cost - funds) / liveIncome
+	local decision = {
+		action = "save",
+		target = target,
+		missing = target.cost - funds,
+		wait = wait,
+		alternative = affordable,
+		advantage = math.huge,
+	}
+	if not affordable then
+		return decision
+	end
+
+	local waitAfter = (target.cost - (funds - affordable.cost)) / (liveIncome + math.max(0, affordable.gain))
+	decision.advantage = affordable.roi / math.max(1e-6, target.roi)
+
+	local shouldSave = Config.SaveMode
+		and Config.Strategy == "Lucro"
+		and wait <= Config.MaxSaveSeconds
+		and decision.advantage >= SAVE_ADVANTAGE
+		and waitAfter > wait + 0.05
+		and affordable.roi > wait * 0.9
+
+	if not shouldSave then
+		decision.action = "buy"
+		decision.buy = affordable
+	end
+	return decision
+end
+
+local function describeDecision(decision)
+	if decision.action == "save" then
+		local detail = string.format(
+			"Faltam %s • ETA %ds • +%s/s",
+			formatNumber(decision.missing),
+			math.ceil(decision.wait),
+			formatNumber(decision.target.gain)
+		)
+		if decision.alternative then
+			detail ..= string.format(" • %s seria %.2fx pior", decision.alternative.name, decision.advantage)
+		end
+		return "Guardando para " .. decision.target.name, detail
+	end
+	if decision.action == "buy" then
+		local plan = decision.buy
+		return "Próxima compra: " .. plan.name,
+			string.format("Custo %s • +%s/s • retorno %ss", formatNumber(plan.cost), formatNumber(plan.gain), formatNumber(plan.roi))
+	end
+	return "Aguardando oportunidades", "Ative geradores, melhorias ou mercado nas abas Farm e Eventos."
+end
+
+local savingTargetKey
+
+local function runPurchases()
+	local decision = decidePurchase(true)
+	local plan = decision.buy
+	if not plan then
+		local key = decision.target and decision.target.kind .. decision.target.id
+		if decision.action == "save" and key ~= savingTargetKey then
+			savingTargetKey = key
+			local title, detail = describeDecision(decision)
+			log(title .. " • " .. detail)
+		end
+		return
+	end
+
+	savingTargetKey = nil
+	if plan.kind == "upgrade" then
+		buyUpgrade(Upgrades.byId[plan.id])
+	elseif buyGenerator(plan.id, plan.kind == "rare") then
+		log(string.format("Compra inteligente: %s • +%s/s • retorno %ss", plan.name, formatNumber(plan.gain), formatNumber(plan.roi)))
+	end
+end
+
+-- Actions
+
+local function canCast(spell)
+	return driver.spellReady(spell) and driver.mana() >= driver.spellCost(spell)
+end
+
+local function pickSpell()
+	if Config.Spell ~= "auto" then
+		return Fortunes.byId[Config.Spell]
+	end
+	for _, id in AUTO_SPELL_ORDER do
+		local spell = Fortunes.byId[id]
+		if spell and canCast(spell) then
+			return spell
+		end
+	end
+end
+
+local function castSpell(spell)
+	if not (ready() and spell and canCast(spell) and driver.castSpell(spell.id)) then
+		return false
+	end
+	counters.spells += 1
+	log("Feitiço enviado: " .. spell.name)
+	return true
+end
+
+local function harvestLump()
+	if not (ready() and driver.lumpStage() == "ripe" and driver.harvestLump()) then
+		return false
+	end
+	counters.harvests += 1
+	log("Colheita enviada")
+	return true
+end
+
+local function claimReward()
+	if not (ready() and not driver.rewardOwned() and driver.rewardReady() and driver.claimReward()) then
+		return false
+	end
+	log("Recompensa resgatada")
+	return true
+end
+
+-- Stamina
+
+local staminaResting = false
+
+local function hasStamina()
+	if not Config.StaminaGuard then
+		staminaResting = false
+		return true
+	end
+	local stamina = math.floor(driver.stamina() * 100)
+	local resumeAt = math.max(Config.ResumeStamina, Config.MinStamina)
+	if staminaResting and stamina >= resumeAt then
+		staminaResting = false
+		log(string.format("Stamina em %d%%; cliques retomados", stamina))
+	elseif not staminaResting and stamina <= Config.MinStamina then
+		staminaResting = true
+		log(string.format("Stamina em %d%%; cliques pausados até %d%%", stamina, resumeAt))
+	end
+	return not staminaResting
+end
+
+-- Game interface tracking
+
+local gameGuiJanitor = janitor:add(Janitor.new())
+local gameGui = {
+	root = nil,
+	bigCoin = nil,
+	searchedAt = 0,
+	extras = {},
+}
+
+local laptopOverrides = {}
+local laptopInstances = {}
+
+local function override(instance, property, value)
+	local saved = laptopOverrides[instance]
+	if not saved then
+		saved = {}
+		laptopOverrides[instance] = saved
+	end
+	if saved[property] == nil then
+		saved[property] = instance[property]
+	end
+	instance[property] = value
+end
+
+local function originalValue(instance, property)
+	local saved = laptopOverrides[instance]
+	local value = saved and saved[property]
+	if value == nil then
+		return instance[property]
+	end
+	return value
+end
+
+local function restoreLaptop()
+	for instance, saved in laptopOverrides do
+		for property, value in saved do
+			pcall(function()
+				instance[property] = value
+			end)
+		end
+	end
+	for _, instance in laptopInstances do
+		pcall(instance.Destroy, instance)
+	end
+	table.clear(laptopOverrides)
+	table.clear(laptopInstances)
+end
+
+janitor:add(restoreLaptop)
+
+local function trackGameButton(item)
+	if not item:IsA("GuiButton") then
+		return
+	end
+	if item.Name == "BigCoin" then
+		gameGui.bigCoin, gameGui.searchedAt = item, 0
+	elseif item.Name == "GoldenCoin" or item.Name == "Wrinkler" then
+		gameGui.extras[item] = true
+	end
+end
+
+local function untrackGameButton(item)
+	gameGui.extras[item] = nil
+	if item == gameGui.bigCoin then
+		gameGui.bigCoin = nil
+	end
+end
+
+local function bindGameGui(root)
+	gameGuiJanitor:clean()
+	restoreLaptop()
+	table.clear(gameGui.extras)
+	gameGui.root, gameGui.bigCoin = root, nil
+	if not root then
+		return
+	end
+	for _, item in root:GetDescendants() do
+		trackGameButton(item)
+	end
+	gameGuiJanitor:connect(root.DescendantAdded, trackGameButton)
+	gameGuiJanitor:connect(root.DescendantRemoving, untrackGameButton)
+end
+
+local function clearFill(item)
+	override(item, "BackgroundTransparency", 1)
+	override(item, "Active", false)
+	if item:IsA("ImageLabel") then
+		override(item, "ImageTransparency", 1)
+	end
+end
+
+local function coversScreen(item, viewport)
+	return item:IsA("GuiObject")
+		and item.AbsoluteSize.X >= viewport.X * SCREEN_COVERAGE
+		and item.AbsoluteSize.Y >= viewport.Y * SCREEN_COVERAGE
+end
+
+local function pinToEdge(column, edgeX)
+	local anchor = originalValue(column, "AnchorPoint")
+	local position = originalValue(column, "Position")
+	local size = column.Size
+	local shiftX = edgeX - anchor.X
+	override(column, "AnchorPoint", Vector2.new(edgeX, 0))
+	override(column, "Position", UDim2.new(
+		position.X.Scale + size.X.Scale * shiftX,
+		position.X.Offset + size.X.Offset * shiftX,
+		position.Y.Scale - size.Y.Scale * anchor.Y,
+		position.Y.Offset - size.Y.Offset * anchor.Y
+	))
+end
+
+local function scaleColumn(column)
+	local scale = column:FindFirstChildOfClass("UIScale")
+	if not scale then
+		scale = Instance.new("UIScale")
+		scale.Name = COMPACT_SCALE_NAME
+		scale.Parent = column
+		table.insert(laptopInstances, scale)
+	end
+	local base = if scale.Name == COMPACT_SCALE_NAME then 1 else originalValue(scale, "Scale")
+	override(scale, "Scale", base * Config.CompactScale)
+end
+
+local missingLaptopLogged = false
+
+local function compactLaptop()
+	local root, coin = gameGui.root, gameGui.bigCoin
+	local main = root and root:FindFirstChild("Main")
+	local body = main and main:FindFirstChild("Body")
+	local camera = workspace.CurrentCamera
+	if not (body and coin and camera) then
+		if root and not missingLaptopLogged then
+			missingLaptopLogged = true
+			log("Compact view: Main/Body ou BigCoin não encontrados na CoinClickerGui", true)
+		end
+		return
+	end
+	missingLaptopLogged = false
+
+	for _, layer in root:GetChildren() do
+		if layer ~= main and coversScreen(layer, camera.ViewportSize) then
+			clearFill(layer)
+		end
+	end
+	local panelColor = main.BackgroundColor3
+	clearFill(main)
+	clearFill(body)
+
+	for _, column in body:GetChildren() do
+		local isStore, isCoin = column.Name == "RightColumn", coin:IsDescendantOf(column)
+		if (isStore or isCoin) and column:IsA("GuiObject") then
+			override(column, "BackgroundColor3", panelColor)
+			override(column, "BackgroundTransparency", PANEL_TRANSPARENCY)
+			pinToEdge(column, if isStore then 1 else 0)
+			scaleColumn(column)
+		elseif column:IsA("GuiObject") then
+			clearFill(column)
+			for _, child in column:GetChildren() do
+				if child:IsA("GuiObject") then
+					override(child, "Visible", false)
+				end
+			end
+		end
+	end
+end
+
+onOption("CompactView", function(enabled)
+	if enabled then
+		attempt("Laptop compacto", compactLaptop)
+	else
+		restoreLaptop()
+	end
 end)
 
-Main.InputChanged:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-        dragInput = input
-    end
-end)
+-- Anti-Cheat Safe: Humanized Simulated Mouse Clicker
+local rng = Random.new()
 
-UserInputService.InputChanged:Connect(function(input)
-    if input == dragInput and dragging then
-        local delta = input.Position - dragStart
-        Main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-    end
-end)
+local function clickSimulatedMouseOnCoin()
+	local coin = gameGui.bigCoin
+	if not coin or not coin.Parent or not coin.Visible or not hasStamina() or Config.Paused or not Config.MouseClickSpam then
+		return
+	end
 
-local Stroke = Instance.new("UIStroke")
-Stroke.Thickness = 2
-Stroke.Color = Color3.fromRGB(126,79,255)
-Stroke.Parent = Main
+	local center = coin.AbsolutePosition + (coin.AbsoluteSize * 0.5)
+	local offsetX = rng:NextNumber(-coin.AbsoluteSize.X * 0.25, coin.AbsoluteSize.X * 0.25)
+	local offsetY = rng:NextNumber(-coin.AbsoluteSize.Y * 0.25, coin.AbsoluteSize.Y * 0.25)
+	local clickPos = Vector2.new(center.X + offsetX, center.Y + offsetY)
 
-local Title = Instance.new("TextLabel")
-Title.Size = UDim2.new(1,-74,0,34)
-Title.Position = UDim2.fromOffset(12,4)
-Title.BackgroundTransparency = 1
-Title.Text = "CoinClicker v33.1"
-Title.TextColor3 = Color3.new(1,1,1)
-Title.Font = Enum.Font.GothamBold
-Title.TextSize = 16
-Title.TextXAlignment = Enum.TextXAlignment.Left
-Title.Parent = Main
+	VirtualInputManager:SendMouseButtonEvent(clickPos.X, clickPos.Y, 0, true, game, 0)
+	task.wait(rng:NextNumber(0.015, 0.035))
+	VirtualInputManager:SendMouseButtonEvent(clickPos.X, clickPos.Y, 0, false, game, 0)
 
-local Close = Instance.new("TextButton")
-Close.Size = UDim2.fromOffset(28,28)
-Close.Position = UDim2.new(1,-34,0,5)
-Close.BackgroundTransparency = 1
-Close.Text = "×"
-Close.TextColor3 = Color3.fromRGB(255,110,110)
-Close.Font = Enum.Font.GothamBold
-Close.TextSize = 20
-Close.Parent = Main
-
-local Minimize = Instance.new("TextButton")
-Minimize.Size = UDim2.fromOffset(28,28)
-Minimize.Position = UDim2.new(1,-64,0,5)
-Minimize.BackgroundTransparency = 1
-Minimize.Text = "-"
-Minimize.TextColor3 = Color3.new(1,1,1)
-Minimize.Font = Enum.Font.GothamBold
-Minimize.TextSize = 24
-Minimize.Parent = Main
-
-local Status = Instance.new("TextLabel")
-Status.Size = UDim2.new(1,-24,0,18)
-Status.Position = UDim2.fromOffset(12,38)
-Status.BackgroundTransparency = 1
-Status.Text = "Pronto"
-Status.TextColor3 = Color3.fromRGB(150,225,165)
-Status.Font = Enum.Font.GothamMedium
-Status.TextSize = 10
-Status.TextXAlignment = Enum.TextXAlignment.Left
-Status.Parent = Main
-
-local Holder = Instance.new("Frame")
-Holder.Size = UDim2.new(1,-20,1,-66)
-Holder.Position = UDim2.fromOffset(10,60)
-Holder.BackgroundTransparency = 1
-Holder.Parent = Main
-
-local Layout = Instance.new("UIListLayout")
-Layout.Padding = UDim.new(0,7)
-Layout.Parent = Holder
-
-local isMinimized = false
-Minimize.Activated:Connect(function()
-    isMinimized = not isMinimized
-    if isMinimized then
-        Main.Size = UDim2.fromOffset(265, 42)
-        Minimize.Text = "+"
-    else
-        Main.Size = UDim2.fromOffset(265, 375)
-        Minimize.Text = "-"
-    end
-end)
-
-local function toggle(label, key)
-    local B = Instance.new("TextButton")
-    B.Size = UDim2.new(1,0,0,36)
-    B.BackgroundColor3 = Color3.fromRGB(31,28,43)
-    B.BorderSizePixel = 0
-    B.Text = ""
-    B.Parent = Holder
-    Instance.new("UICorner", B).CornerRadius = UDim.new(0,9)
-    
-    local T = Instance.new("TextLabel")
-    T.Size = UDim2.new(1,-62,1,0)
-    T.Position = UDim2.fromOffset(10,0)
-    T.BackgroundTransparency = 1
-    T.Text = label
-    T.TextColor3 = Color3.new(1,1,1)
-    T.Font = Enum.Font.GothamMedium
-    T.TextSize = 12
-    T.TextXAlignment = Enum.TextXAlignment.Left
-    T.Parent = B
-    
-    local F = Instance.new("TextLabel")
-    F.Size = UDim2.fromOffset(44,24)
-    F.Position = UDim2.new(1,-52,0.5,-12)
-    F.TextColor3 = Color3.new(1,1,1)
-    F.Font = Enum.Font.GothamBold
-    F.TextSize = 10
-    F.Parent = B
-    Instance.new("UICorner", F).CornerRadius = UDim.new(1,0)
-    
-    local function refresh()
-        F.Text = State[key] and "ON" or "OFF"
-        F.BackgroundColor3 = State[key] and Color3.fromRGB(126,79,255) or Color3.fromRGB(66,63,78)
-    end
-    
-    B.Activated:Connect(function()
-        State[key] = not State[key]
-        refresh()
-        if key == "AutoClick" and not State[key] then
-            State.StaminaStart = 0
-            Status.Text = "Pronto"
-        end
-        if key == "CompactView" then pcall(applyCompact) end
-    end)
-    refresh()
+	counters.simulatedClicks += 1
 end
 
-toggle("Auto Click", "AutoClick")
-toggle("Auto Comprar Itens", "AutoItems")
-toggle("Auto Buff / Upgrades", "AutoBuff")
-toggle("Auto Wrinklers", "AutoWrinkler")
-toggle("Auto Golden", "AutoGolden")
-toggle("Auto Equip Item", "AutoEquip")
-toggle("Compact View", "CompactView")
+-- Collector
 
---==================================================
--- LOOP PRINCIPAL
---==================================================
-local connection
-connection = RunService.Heartbeat:Connect(function()
-    if not State.Running then return end
-    local now = os.clock()
-    
-    if State.AutoEquip and now >= State.NextEquipCheck then
-        State.NextEquipCheck = now + 1
-        autoEquipTool()
-    end
-    
-    if State.AutoClick then
-        if State.StaminaStart == 0 then
-            State.StaminaStart = now
-            State.TargetClickTime = math.random(48, 52)
-            State.TargetRestTime = math.random(67, 73)
-        end
-        
-        local totalCycle = State.TargetClickTime + State.TargetRestTime
-        local elapsed = (now - State.StaminaStart) % totalCycle
-        
-        if elapsed < State.TargetClickTime then
-            local remainingClick = math.ceil(State.TargetClickTime - elapsed)
-            
-            if now < State.MicroPauseEnd then
-                Status.Text = "Clicando... (Pausa)"
-            else
-                if math.random(1, 1000) <= 10 then
-                    State.MicroPauseEnd = now + (math.random(15, 35) / 100)
-                end
-                
-                if now - State.LastClick >= State.NextClickDelay then
-                    State.LastClick = now
-                    local baseDelay = math.random(18, 48) / 1000
-                    local fatigue = (elapsed / State.TargetClickTime) * 0.012
-                    State.NextClickDelay = baseDelay + fatigue
-                    
-                    local big = getBigCoin()
-                    if big then
-                        press(big, true)
-                        Status.Text = "Clicando... (" .. remainingClick .. "s)"
-                    else
-                        cachedBigCoin = nil
-                        Status.Text = "Aguardando Item..."
-                    end
-                end
-            end
-        else
-            local remainingRest = math.ceil(totalCycle - elapsed)
-            Status.Text = "Descansando (" .. remainingRest .. "s)"
-            
-            if remainingRest == 1 then
-                State.TargetClickTime = math.random(48, 52)
-                State.TargetRestTime = math.random(67, 73)
-            end
-        end
-    end
-    
-    if State.AutoItems and now >= State.NextItemTime then
-        State.NextItemTime = now + getRandomHumanDelay()
-        buyBestGenerator()
-    end
-    
-    if State.AutoBuff and now >= State.NextBuffTime then
-        State.NextBuffTime = now + getRandomHumanDelay()
-        buyAvailableUpgrade()
-    end
-    
-    if State.AutoWrinkler and now >= State.NextWrinklerTime then
-        State.NextWrinklerTime = now + getRandomHumanDelay()
-        popWrinklers()
-    end
-    
-    if State.AutoGolden and now >= State.NextGoldenTime then
-        State.NextGoldenTime = now + getGoldenDelay()
-        clickGoldens()
-    end
-    
-    if now - State.LastCompact >= 0.4 then
-        State.LastCompact = now
-        pcall(applyCompact)
-    end
-end)
+local collector = {
+	generation = 0,
+	nextClickAt = 0,
+	wrinklersUntil = 0,
+	wrinklersDueAt = os.clock() + Config.WrinklerInterval,
+	targets = { extra = {}, golden = {}, wrinkler = {} },
+}
 
-local function stop()
-    State.Running = false
-    State.CompactView = false
-    pcall(applyCompact)
-    if connection then connection:Disconnect() end
-    if Gui then Gui:Destroy() end
+local function humanDelay(range)
+	return range.Min + (range.Max - range.Min) * (rng:NextNumber() + rng:NextNumber()) / 2
 end
 
-Close.Activated:Connect(stop)
+local function nextClickGap()
+	local gap = humanDelay(CLICK_GAP)
+	if rng:NextNumber() < HESITATION_CHANCE then
+		gap += humanDelay(HESITATION)
+	end
+	return gap
+end
+
+local function markTarget(kind, key, now)
+	local pool = collector.targets[kind]
+	local target = pool[key]
+	if not target then
+		target = { readyAt = now + humanDelay(REACTION_DELAY) }
+		pool[key] = target
+	end
+	target.generation = collector.generation
+end
+
+local function scanTargets(now, automatic)
+	collector.generation += 1
+	if automatic and Config.AutoExtraUI then
+		for extra in gameGui.extras do
+			if extra.Visible and extra.Parent then
+				markTarget("extra", extra, now)
+			end
+		end
+	end
+	if automatic and Config.AutoGolden then
+		for _, golden in driver.goldens() do
+			markTarget("golden", golden.id, now)
+		end
+	end
+	if now < collector.wrinklersUntil then
+		local wrinklers = driver.wrinklers()
+		if #wrinklers == 0 then
+			collector.wrinklersUntil = 0
+		end
+		for _, wrinkler in wrinklers do
+			markTarget("wrinkler", wrinkler.id, now)
+		end
+	end
+end
+
+local function pickTarget(now)
+	local bestKind, bestKey, bestAt
+	for kind, pool in collector.targets do
+		for key, target in pool do
+			if target.generation ~= collector.generation then
+				pool[key] = nil
+			elseif target.readyAt <= now and (not bestAt or target.readyAt < bestAt) then
+				bestKind, bestKey, bestAt = kind, key, target.readyAt
+			end
+		end
+	end
+	return bestKind, bestKey
+end
+
+local collectActions = {
+	extra = function(extra)
+		if extra.Parent and extra.Visible then
+			firesignal(extra.Activated)
+			counters.extraClicks += 1
+		end
+	end,
+	golden = function(id)
+		if driver.clickGolden(id) then
+			counters.goldens += 1
+			log("Moeda dourada coletada")
+		end
+	end,
+	wrinkler = function(id)
+		if driver.popWrinkler(id) then
+			counters.wrinklers += 1
+			log("Wrinkler coletado")
+		end
+	end,
+}
+
+local function requestWrinklers(now)
+	collector.wrinklersUntil = now + WRINKLER_WINDOW
+end
+
+local function runCollector(now)
+	local automatic = not Config.Paused
+	if automatic and Config.AutoWrinkler and now >= collector.wrinklersDueAt then
+		collector.wrinklersDueAt = now + Config.WrinklerInterval * rng:NextNumber(1 - WRINKLER_JITTER, 1 + WRINKLER_JITTER)
+		requestWrinklers(now)
+	end
+	scanTargets(now, automatic)
+	if now < collector.nextClickAt then
+		return
+	end
+	local kind, key = pickTarget(now)
+	if not kind then
+		return
+	end
+	collector.targets[kind][key] = nil
+	collector.nextClickAt = now + nextClickGap()
+	collectActions[kind](key)
+end
+
+local function openGamePanel(panelName)
+	local buttons = gameGui.root and gameGui.root:FindFirstChild("Buttons", true)
+	if buttons then
+		for _, gameButton in buttons:GetChildren() do
+			if gameButton:IsA("TextButton") and gameButton.Text == panelName then
+				firesignal(gameButton.Activated)
+				return true
+			end
+		end
+	end
+	log("Painel do jogo indisponível: " .. panelName)
+	return false
+end
+
+-- Server sync
+
+local function recordSample(snapshot, now)
+	local samples = server.samples
+	table.insert(samples, { at = now, clicks = snapshot.TotalClicks or 0, earned = snapshot.TotalEarned or 0 })
+	while #samples > 2 and now - samples[2].at > SAMPLE_WINDOW do
+		table.remove(samples, 1)
+	end
+
+	local first, latest = samples[1], samples[#samples]
+	local span = now - first.at
+	if span >= 1 then
+		server.rate = math.max(0, (latest.clicks - first.clicks) / span)
+		server.income = math.max(0, (latest.earned - first.earned) / span)
+	end
+
+	if now - server.chartedAt >= 1 then
+		server.chartedAt = now
+		table.insert(server.history, server.income)
+		if #server.history > CHART_SAMPLES then
+			table.remove(server.history, 1)
+		end
+	end
+end
+
+local function isConfirmed(entry, snapshot)
+	if entry.kind == "upgrade" then
+		return (snapshot.Purchased or {})[entry.id] == true
+	end
+	return ((snapshot.Owned or {})[entry.id] or 0) >= entry.owned
+end
+
+local function onSync(snapshot)
+	if type(snapshot) ~= "table" then
+		return
+	end
+	local now = os.clock()
+	recordSample(snapshot, now)
+	server.coins, server.syncedAt = snapshot.Coins, now
+	server.syncCount += 1
+
+	for index = #pending, 1, -1 do
+		local entry = pending[index]
+		if isConfirmed(entry, snapshot) then
+			server.confirmed += 1
+			table.remove(pending, index)
+		elseif now - entry.at > PENDING_TIMEOUT and server.syncCount > entry.sync + 1 then
+			server.rejected += 1
+			table.remove(pending, index)
+		end
+	end
+	invalidatePlan()
+end
+
+local function reconnect()
+	startBackend()
+	server.rate, server.income, server.coins, server.syncedAt = 0, 0, nil, nil
+	table.clear(server.samples)
+	table.clear(pending)
+	invalidatePlan()
+	log("Backend reiniciado; aguardando o servidor")
+end
+
+local function buildInterface()
+	-- Theme
+
+	local Theme = {
+		Background = Color3.fromRGB(11, 13, 18),
+		Sidebar = Color3.fromRGB(15, 18, 25),
+		Surface = Color3.fromRGB(20, 24, 33),
+		Field = Color3.fromRGB(29, 34, 46),
+		Stroke = Color3.fromRGB(36, 42, 56),
+		Muted = Color3.fromRGB(52, 59, 76),
+		Text = Color3.fromRGB(236, 239, 245),
+		Subtext = Color3.fromRGB(136, 146, 166),
+		Accent = Color3.fromRGB(91, 104, 245),
+		Success = Color3.fromRGB(52, 211, 153),
+		Warning = Color3.fromRGB(251, 191, 36),
+		Danger = Color3.fromRGB(239, 83, 104),
+	}
+
+	local TWEEN_INFO = TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	local RIGHT_CENTER = Vector2.new(1, 0.5)
+	local CONTROL_POSITION = UDim2.new(1, -16, 0.5, 0)
+	local KNOB_OFF = UDim2.new(0, 3, 0.5, 0)
+	local KNOB_ON = UDim2.new(1, -21, 0.5, 0)
+
+	local LABEL_DEFAULTS = {
+		BackgroundTransparency = 1,
+		Font = Enum.Font.Gotham,
+		TextSize = 13,
+		TextColor3 = Theme.Text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+	}
+
+	local BUTTON_DEFAULTS = {
+		BackgroundColor3 = Theme.Field,
+		BorderSizePixel = 0,
+		AutoButtonColor = true,
+		Font = Enum.Font.GothamBold,
+		TextSize = 12,
+		TextColor3 = Theme.Text,
+	}
+
+	-- Components
+
+	local function merge(base, overrides)
+		local result = table.clone(base)
+		for key, value in overrides do
+			result[key] = value
+		end
+		return result
+	end
+
+	local function create(className, properties)
+		local instance = Instance.new(className)
+		for key, value in properties do
+			if key ~= "Parent" then
+				instance[key] = value
+			end
+		end
+		instance.Parent = properties.Parent
+		return instance
+	end
+
+	local function tween(instance, goal)
+		TweenService:Create(instance, TWEEN_INFO, goal):Play()
+	end
+
+	local function round(parent, radius)
+		create("UICorner", { Parent = parent, CornerRadius = UDim.new(0, radius) })
+	end
+
+	local function outline(parent)
+		create("UIStroke", { Parent = parent, Color = Theme.Stroke, ApplyStrokeMode = Enum.ApplyStrokeMode.Border })
+	end
+
+	local function stack(parent, gap, properties)
+		return create("UIListLayout", merge({
+			Parent = parent,
+			Padding = UDim.new(0, gap),
+			SortOrder = Enum.SortOrder.LayoutOrder,
+		}, properties or {}))
+	end
+
+	local function frame(properties)
+		return create("Frame", merge({ BackgroundColor3 = Theme.Surface, BorderSizePixel = 0 }, properties))
+	end
+
+	local function label(properties)
+		return create("TextLabel", merge(LABEL_DEFAULTS, properties))
+	end
+
+	local function button(properties, onClick)
+		local instance = create("TextButton", merge(BUTTON_DEFAULTS, properties))
+		round(instance, 8)
+		janitor:connect(instance.Activated, function()
+			attempt(instance.Name, onClick)
+		end)
+		return instance
+	end
+
+	local function paint(target, enabled)
+		target.BackgroundColor3 = if enabled then Theme.Accent else Theme.Field
+	end
+
+	local function nextOrder(parent)
+		return #parent:GetChildren()
+	end
+
+	local function section(page, title, description)
+		local holder = frame({
+			Parent = page,
+			Size = UDim2.new(1, 0, 0, if description then 46 else 28),
+			BackgroundTransparency = 1,
+			LayoutOrder = nextOrder(page),
+		})
+		label({
+			Parent = holder,
+			Text = title,
+			Position = UDim2.fromOffset(2, 4),
+			Size = UDim2.new(1, -4, 0, 20),
+			Font = Enum.Font.GothamBold,
+			TextSize = 15,
+		})
+		if description then
+			label({
+				Parent = holder,
+				Text = description,
+				Position = UDim2.fromOffset(2, 25),
+				Size = UDim2.new(1, -4, 0, 16),
+				TextSize = 11,
+				TextColor3 = Theme.Subtext,
+			})
+		end
+	end
+
+	local function card(page, height)
+		local instance = frame({ Parent = page, Size = UDim2.new(1, 0, 0, height), LayoutOrder = nextOrder(page) })
+		round(instance, 10)
+		outline(instance)
+		return instance
+	end
+
+	local function textCard(page, height, textSize)
+		local holder = card(page, height)
+		return label({
+			Parent = holder,
+			Position = UDim2.fromOffset(16, 12),
+			Size = UDim2.new(1, -32, 1, -24),
+			TextSize = textSize,
+			TextWrapped = true,
+			TextTruncate = Enum.TextTruncate.None,
+			TextYAlignment = Enum.TextYAlignment.Top,
+			LineHeight = 1.15,
+		})
+	end
+
+	local function settingRow(page, title, description, controlWidth, icon)
+		local row = card(page, 58)
+		local textLeft = if icon then 62 else 16
+		local textWidth = UDim2.new(1, -(textLeft + controlWidth + 28), 0, 18)
+		if icon then
+			create("ImageLabel", {
+				Parent = row,
+				Image = icon,
+				BackgroundTransparency = 1,
+				Position = UDim2.fromOffset(14, 10),
+				Size = UDim2.fromOffset(38, 38),
+			})
+		end
+		local heading = label({
+			Parent = row,
+			Text = title,
+			Position = UDim2.fromOffset(textLeft, 10),
+			Size = textWidth,
+			Font = Enum.Font.GothamBold,
+		})
+		local detail = label({
+			Parent = row,
+			Text = description or "",
+			Position = UDim2.fromOffset(textLeft, 30),
+			Size = textWidth,
+			TextSize = 11,
+			TextColor3 = Theme.Subtext,
+		})
+		return row, detail, heading
+	end
+
+	local function toggleRow(page, key, title, description)
+		local row = settingRow(page, title, description, 44)
+		local track = create("TextButton", {
+			Parent = row,
+			Name = key,
+			Text = "",
+			AutoButtonColor = false,
+			BorderSizePixel = 0,
+			AnchorPoint = RIGHT_CENTER,
+			Position = CONTROL_POSITION,
+			Size = UDim2.fromOffset(44, 24),
+			BackgroundColor3 = Theme.Muted,
+		})
+		round(track, 12)
+		local knob = frame({
+			Parent = track,
+			AnchorPoint = Vector2.new(0, 0.5),
+			Position = KNOB_OFF,
+			Size = UDim2.fromOffset(18, 18),
+			BackgroundColor3 = Theme.Text,
+		})
+		round(knob, 9)
+
+		janitor:connect(track.Activated, function()
+			setOption(key, not Config[key])
+			log(title .. ": " .. (if Config[key] then "ligado" else "desligado"))
+		end)
+		onOption(key, function(enabled)
+			tween(track, { BackgroundColor3 = if enabled then Theme.Accent else Theme.Muted })
+			tween(knob, { Position = if enabled then KNOB_ON else KNOB_OFF })
+		end)
+	end
+
+	local function numberRow(page, key, title, description, min, max)
+		local row = settingRow(page, title, description, 96)
+		local box = create("TextBox", {
+			Parent = row,
+			Name = key,
+			AnchorPoint = RIGHT_CENTER,
+			Position = CONTROL_POSITION,
+			Size = UDim2.fromOffset(96, 30),
+			BackgroundColor3 = Theme.Field,
+			BorderSizePixel = 0,
+			Text = tostring(Config[key]),
+			TextColor3 = Theme.Text,
+			Font = Enum.Font.GothamBold,
+			TextSize = 13,
+			ClearTextOnFocus = false,
+		})
+		round(box, 8)
+		outline(box)
+
+		janitor:connect(box.FocusLost, function()
+			local value = tonumber((box.Text:gsub("%s", ""):gsub(",", ".")))
+			if value and value == value and math.abs(value) ~= math.huge then
+				setOption(key, math.clamp(value, min, max))
+				log(title .. " = " .. Config[key])
+			else
+				log("Número inválido: " .. title)
+			end
+			box.Text = tostring(Config[key])
+		end)
+	end
+
+	local function actionRow(page, title, description, text, onClick, options)
+		options = options or {}
+		local row, detail, heading = settingRow(page, title, description, 104, options.icon)
+		local action = button({
+			Parent = row,
+			Name = title,
+			Text = text,
+			AnchorPoint = RIGHT_CENTER,
+			Position = CONTROL_POSITION,
+			Size = UDim2.fromOffset(104, 30),
+			BackgroundColor3 = options.color or Theme.Field,
+		}, onClick)
+		return detail, action, heading
+	end
+
+	-- Window
+
+	local screen = janitor:add(create("ScreenGui", {
+		Parent = playerGui,
+		Name = GUI_NAME,
+		ResetOnSpawn = false,
+		IgnoreGuiInset = true,
+		DisplayOrder = 1200,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	}))
+
+	local window = frame({
+		Parent = screen,
+		Name = "Window",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(WINDOW_SIZE.X, WINDOW_SIZE.Y),
+		BackgroundColor3 = Theme.Background,
+		Active = true,
+	})
+	round(window, 14)
+	outline(window)
+	local windowScale = create("UIScale", { Parent = window })
+
+	local reopenButton, reopenDragged
+
+	local function setWindowVisible(visible)
+		window.Visible = visible
+		reopenButton.Visible = not visible
+	end
+
+	reopenButton = button({
+		Parent = screen,
+		Name = "Reopen",
+		Text = "AL",
+		Visible = false,
+		Position = UDim2.fromOffset(20, 160),
+		Size = UDim2.fromOffset(58, 38),
+		BackgroundColor3 = Theme.Accent,
+	}, function()
+		if not reopenDragged() then
+			setWindowVisible(true)
+		end
+	end)
+
+	local sidebar = frame({
+		Parent = window,
+		Name = "Sidebar",
+		Size = UDim2.new(0, SIDEBAR_WIDTH, 1, 0),
+		BackgroundColor3 = Theme.Sidebar,
+		Active = true,
+	})
+	round(sidebar, 14)
+	frame({
+		Parent = sidebar,
+		Position = UDim2.new(1, -14, 0, 0),
+		Size = UDim2.new(0, 14, 1, 0),
+		BackgroundColor3 = Theme.Sidebar,
+	})
+	frame({
+		Parent = sidebar,
+		Position = UDim2.new(1, -1, 0, 0),
+		Size = UDim2.new(0, 1, 1, 0),
+		BackgroundColor3 = Theme.Stroke,
+	})
+
+	label({
+		Parent = sidebar,
+		Text = "Auto Laptop",
+		Position = UDim2.fromOffset(20, 18),
+		Size = UDim2.new(1, -40, 0, 20),
+		Font = Enum.Font.GothamBold,
+		TextSize = 16,
+	})
+	label({
+		Parent = sidebar,
+		Text = "Coin Clicker",
+		Position = UDim2.fromOffset(20, 40),
+		Size = UDim2.new(1, -40, 0, 14),
+		TextSize = 11,
+		TextColor3 = Theme.Subtext,
+	})
+
+	local tabList = frame({
+		Parent = sidebar,
+		Name = "Tabs",
+		Position = UDim2.fromOffset(12, 76),
+		Size = UDim2.new(1, -24, 1, -150),
+		BackgroundTransparency = 1,
+	})
+	stack(tabList, 4)
+
+	local connectionDot = frame({
+		Parent = sidebar,
+		Position = UDim2.new(0, 20, 1, -70),
+		Size = UDim2.fromOffset(8, 8),
+		BackgroundColor3 = Theme.Warning,
+	})
+	round(connectionDot, 4)
+	local connectionLabel = label({
+		Parent = sidebar,
+		Position = UDim2.new(0, 36, 1, -76),
+		Size = UDim2.new(1, -52, 0, 20),
+		TextSize = 11,
+		Font = Enum.Font.GothamBold,
+	})
+	label({
+		Parent = sidebar,
+		Text = "F6 pausar bot  •  F7 pausar click\nF8 ocultar painel",
+		Position = UDim2.new(0, 20, 1, -48),
+		Size = UDim2.new(1, -40, 0, 30),
+		TextSize = 10,
+		TextColor3 = Theme.Subtext,
+		TextTruncate = Enum.TextTruncate.None,
+		TextYAlignment = Enum.TextYAlignment.Top,
+	})
+
+	local main = frame({
+		Parent = window,
+		Name = "Main",
+		Position = UDim2.fromOffset(SIDEBAR_WIDTH, 0),
+		Size = UDim2.new(1, -SIDEBAR_WIDTH, 1, 0),
+		BackgroundTransparency = 1,
+	})
+
+	local topBar = frame({
+		Parent = main,
+		Name = "TopBar",
+		Size = UDim2.new(1, 0, 0, 60),
+		BackgroundTransparency = 1,
+		Active = true,
+	})
+	local pageTitle = label({
+		Parent = topBar,
+		Position = UDim2.fromOffset(20, 0),
+		Size = UDim2.new(1, -300, 1, 0),
+		Font = Enum.Font.GothamBold,
+		TextSize = 18,
+	})
+
+	local controls = frame({
+		Parent = topBar,
+		AnchorPoint = RIGHT_CENTER,
+		Position = UDim2.new(1, -16, 0.5, 0),
+		Size = UDim2.fromOffset(280, 30),
+		BackgroundTransparency = 1,
+	})
+	stack(controls, 8, {
+		FillDirection = Enum.FillDirection.Horizontal,
+		HorizontalAlignment = Enum.HorizontalAlignment.Right,
+		VerticalAlignment = Enum.VerticalAlignment.Center,
+	})
+
+	local statusPill = frame({ Parent = controls, Size = UDim2.fromOffset(84, 26), LayoutOrder = 1 })
+	round(statusPill, 13)
+	local statusLabel = label({
+		Parent = statusPill,
+		Size = UDim2.fromScale(1, 1),
+		Font = Enum.Font.GothamBold,
+		TextSize = 10,
+		TextXAlignment = Enum.TextXAlignment.Center,
+	})
+
+	local pauseButton = button({
+		Parent = controls,
+		Name = "Pause",
+		Size = UDim2.fromOffset(88, 30),
+		LayoutOrder = 2,
+	}, togglePause)
+	button({
+		Parent = controls,
+		Name = "Minimize",
+		Text = "–",
+		TextSize = 16,
+		Size = UDim2.fromOffset(30, 30),
+		LayoutOrder = 3,
+	}, function()
+		setWindowVisible(false)
+	end)
+	button({
+		Parent = controls,
+		Name = "Close",
+		Text = "×",
+		TextSize = 18,
+		Size = UDim2.fromOffset(30, 30),
+		BackgroundColor3 = Theme.Danger,
+		LayoutOrder = 4,
+	}, session.Stop)
+
+	onOption("Paused", function(paused)
+		statusLabel.Text = if paused then "PAUSADO" else "ATIVO"
+		statusLabel.TextColor3 = if paused then Theme.Warning else Theme.Success
+		statusPill.BackgroundColor3 = if paused then Color3.fromRGB(58, 46, 18) else Color3.fromRGB(18, 52, 43)
+		pauseButton.Text = if paused then "RETOMAR" else "PAUSAR"
+		paint(pauseButton, paused)
+	end)
+
+	local metricRow = frame({
+		Parent = main,
+		Position = UDim2.fromOffset(20, 60),
+		Size = UDim2.new(1, -40, 0, 64),
+		BackgroundTransparency = 1,
+	})
+	stack(metricRow, 10, { FillDirection = Enum.FillDirection.Horizontal })
+
+	local function metric(caption)
+		local holder = frame({ Parent = metricRow, Size = UDim2.new(1 / 3, -20 / 3, 1, 0), LayoutOrder = nextOrder(metricRow) })
+		round(holder, 10)
+		outline(holder)
+		label({
+			Parent = holder,
+			Text = caption,
+			Position = UDim2.fromOffset(14, 10),
+			Size = UDim2.new(1, -28, 0, 14),
+			Font = Enum.Font.GothamBold,
+			TextSize = 10,
+			TextColor3 = Theme.Subtext,
+		})
+		return label({
+			Parent = holder,
+			Text = "—",
+			Position = UDim2.fromOffset(14, 28),
+			Size = UDim2.new(1, -28, 0, 24),
+			Font = Enum.Font.GothamBold,
+			TextSize = 20,
+		})
+	end
+
+	local coinsMetric = metric("SALDO CONFIRMADO")
+	local productionMetric = metric("PRODUÇÃO / S")
+	local staminaMetric = metric("STAMINA")
+
+	local pageHost = frame({
+		Parent = main,
+		Position = UDim2.fromOffset(20, 136),
+		Size = UDim2.new(1, -28, 1, -150),
+		BackgroundTransparency = 1,
+	})
+
+	-- Navigation
+
+	local pages, tabs, pageUpdaters = {}, {}, {}
+	local selectedPage
+
+	local function selectPage(name)
+		selectedPage = name
+		pageTitle.Text = name
+		for pageName, page in pages do
+			page.Visible = pageName == name
+		end
+		for pageName, tab in tabs do
+			local active = pageName == name
+			tab.button.BackgroundTransparency = if active then 0 else 1
+			tab.label.TextColor3 = if active then Theme.Text else Theme.Subtext
+			tab.indicator.Visible = active
+		end
+		local update = pageUpdaters[name]
+		if update then
+			attempt("Interface", update)
+		end
+	end
+
+	local function addPage(name)
+		local page = create("ScrollingFrame", {
+			Parent = pageHost,
+			Name = name,
+			Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ScrollBarThickness = 3,
+			ScrollBarImageColor3 = Theme.Muted,
+			AutomaticCanvasSize = Enum.AutomaticSize.Y,
+			CanvasSize = UDim2.new(),
+			ScrollingDirection = Enum.ScrollingDirection.Y,
+			Visible = false,
+		})
+		stack(page, 8)
+		create("UIPadding", { Parent = page, PaddingRight = UDim.new(0, 12), PaddingBottom = UDim.new(0, 8) })
+		pages[name] = page
+
+		local tabButton = button({
+			Parent = tabList,
+			Name = "Tab" .. name,
+			Text = "",
+			AutoButtonColor = false,
+			BackgroundColor3 = Theme.Surface,
+			BackgroundTransparency = 1,
+			Size = UDim2.new(1, 0, 0, 36),
+			LayoutOrder = nextOrder(tabList),
+		}, function()
+			selectPage(name)
+		end)
+		local indicator = frame({
+			Parent = tabButton,
+			AnchorPoint = Vector2.new(0, 0.5),
+			Position = UDim2.fromScale(0, 0.5),
+			Size = UDim2.fromOffset(3, 16),
+			BackgroundColor3 = Theme.Accent,
+			Visible = false,
+		})
+		round(indicator, 2)
+		local tabLabel = label({
+			Parent = tabButton,
+			Text = name,
+			Position = UDim2.fromOffset(16, 0),
+			Size = UDim2.new(1, -16, 1, 0),
+			Font = Enum.Font.GothamBold,
+			TextColor3 = Theme.Subtext,
+		})
+		tabs[name] = { button = tabButton, label = tabLabel, indicator = indicator }
+		return page
+	end
+
+	-- Page: Painel
+
+	do
+		local page = addPage("Painel")
+
+		section(page, "Servidor ao vivo", "Média móvel de 8 segundos das atualizações do servidor.")
+		local live = card(page, 98)
+		local function liveStat(position, caption)
+			label({
+				Parent = live,
+				Text = caption,
+				Position = position + UDim2.fromOffset(0, 34),
+				Size = UDim2.new(0.5, -24, 0, 14),
+				TextSize = 10,
+				TextColor3 = Theme.Subtext,
+			})
+			return label({
+				Parent = live,
+				Position = position,
+				Size = UDim2.new(0.5, -24, 0, 30),
+				Font = Enum.Font.GothamBold,
+				TextSize = 22,
+			})
+		end
+		local rateLabel = liveStat(UDim2.fromOffset(16, 10), "CLIQUES / S")
+		local incomeLabel = liveStat(UDim2.new(0.5, 8, 0, 10), "MOEDAS / S")
+		rateLabel.TextColor3 = Theme.Success
+		local syncLabel = label({
+			Parent = live,
+			Position = UDim2.fromOffset(16, 68),
+			Size = UDim2.new(1, -32, 0, 18),
+			TextSize = 11,
+			TextColor3 = Theme.Subtext,
+		})
+
+		section(page, "Ritmo de ganho", "Uma barra por segundo de atualização real.")
+		local chart = card(page, 96)
+		local plot = frame({
+			Parent = chart,
+			Position = UDim2.fromOffset(12, 12),
+			Size = UDim2.new(1, -24, 1, -24),
+			BackgroundTransparency = 1,
+		})
+		local bars = {}
+		for index = 1, CHART_SAMPLES do
+			local bar = frame({
+				Parent = plot,
+				AnchorPoint = Vector2.new(0, 1),
+				Position = UDim2.new((index - 1) / CHART_SAMPLES, 2, 1, 0),
+				Size = UDim2.new(1 / CHART_SAMPLES, -4, 0, 2),
+				BackgroundColor3 = Theme.Muted,
+			})
+			round(bar, 3)
+			bars[index] = bar
+		end
+
+		section(page, "Motor de compras", "Compara ganho passivo e valor dos cliques por moeda gasta.")
+		local plan = card(page, 70)
+		local planTitle = label({
+			Parent = plan,
+			Position = UDim2.fromOffset(16, 12),
+			Size = UDim2.new(1, -32, 0, 20),
+			Font = Enum.Font.GothamBold,
+			TextSize = 14,
+		})
+		local planDetail = label({
+			Parent = plan,
+			Position = UDim2.fromOffset(16, 36),
+			Size = UDim2.new(1, -32, 0, 18),
+			TextSize = 12,
+			TextColor3 = Theme.Subtext,
+		})
+
+		pageUpdaters.Painel = function()
+			rateLabel.Text = string.format("%.1f", server.rate)
+			incomeLabel.Text = formatNumber(server.income)
+			syncLabel.Text = string.format(
+				"%d compras confirmadas • %d aguardando • %s",
+				server.confirmed,
+				#pending,
+				if server.syncedAt then string.format("sync há %.1fs", os.clock() - server.syncedAt) else "aguardando servidor"
+			)
+
+			local peak = 1
+			for _, sample in server.history do
+				peak = math.max(peak, sample)
+			end
+			for index, bar in bars do
+				local sample = server.history[index]
+				bar.Size = UDim2.new(1 / CHART_SAMPLES, -4, if sample then math.max(0.04, sample / peak) else 0, 2)
+				bar.BackgroundColor3 = if sample then Theme.Accent else Theme.Muted
+			end
+
+			planTitle.Text, planDetail.Text = describeDecision(decidePurchase())
+		end
+	end
+
+	-- Page: Farm
+
+	do
+		local page = addPage("Farm")
+
+		section(page, "Cliques Protegidos", "Autoclick com simulação de mouse real (Anti-Cheat Safe).")
+		toggleRow(page, "MouseClickSpam", "Autoclick com Mouse Simulado", "Simula cliques físicos no BigCoin.")
+
+		section(page, "Stamina", "Para os cliques na moeda quando a stamina acaba e espera recuperar.")
+		toggleRow(page, "StaminaGuard", "Respeitar stamina", "Pausa o autoclick abaixo do limite mínimo.")
+		numberRow(page, "MinStamina", "Pausar abaixo de (%)", "Cliques param quando a stamina chega neste valor.", 0, 90)
+		numberRow(page, "ResumeStamina", "Retomar a partir de (%)", "Cliques voltam quando a stamina recupera até aqui.", 10, 100)
+
+		section(page, "Investimento", "Planejador compara custo, ganho e tempo até a próxima compra.")
+		toggleRow(page, "AutoBuy", "Comprar geradores", "Reinveste o saldo nas melhores oportunidades.")
+		toggleRow(page, "AutoUpgrade", "Comprar melhorias", "Compara melhorias e geradores pelo ganho de renda.")
+		toggleRow(page, "SaveMode", "Guardar para compra melhor", "Evita compras baratas que atrasariam opção superior.")
+		numberRow(page, "MaxSaveSeconds", "Limite para guardar", "Espera máxima, em segundos, por compra superior.", 30, 3600)
+
+		local strategyDetail, strategyButton = actionRow(page, "Estratégia de compra", "", "", function()
+			setOption("Strategy", nextInList(STRATEGIES, Config.Strategy))
+			invalidatePlan()
+			log("Estratégia: " .. Config.Strategy)
+		end)
+		onOption("Strategy", function(strategy)
+			strategyButton.Text = strategy
+			strategyDetail.Text = STRATEGY_HINTS[strategy]
+		end)
+	end
+
+	-- Page: Loja
+
+	do
+		local page = addPage("Loja")
+
+		section(page, "Geradores", "Compra 1 unidade preservando a seleção da loja do jogo.")
+		local generatorRows = {}
+		for index, generator in Catalog.generators do
+			local detail, buyButton = actionRow(page, generatorName(generator), "", "Comprar 1", function()
+				if buyGenerator(generator.id, false) then
+					log("Comprou " .. generatorName(generator))
+				else
+					log("Saldo insuficiente ou gerador indisponível")
+				end
+			end, { icon = generator.icon })
+			table.insert(generatorRows, { index = index, detail = detail, button = buyButton })
+		end
+
+		section(page, "Melhorias disponíveis", "As 12 melhorias liberadas mais baratas.")
+		local upgradeRows = {}
+		for slot = 1, UPGRADE_SLOTS do
+			local entry = {}
+			entry.detail, entry.button, entry.title = actionRow(page, "Melhoria " .. slot, "", "Comprar", function()
+				if not buyUpgrade(entry.upgrade) then
+					log("Melhoria indisponível ou saldo insuficiente")
+				end
+			end)
+			entry.row = entry.title.Parent
+			upgradeRows[slot] = entry
+		end
+		local emptyLabel = textCard(page, 44, 12)
+		emptyLabel.Text = "Nenhuma melhoria liberada no momento."
+		emptyLabel.TextColor3 = Theme.Subtext
+
+		pageUpdaters.Loja = function()
+			if not ready() then
+				return
+			end
+			local coins = driver.coins()
+			for _, entry in generatorRows do
+				local cost = driver.priceAt(entry.index)
+				entry.detail.Text = string.format(
+					"Possui %d • %s moedas • +%s/s • retorno %ss",
+					driver.ownedAt(entry.index),
+					formatNumber(cost),
+					formatNumber(driver.marginalCpsAt(entry.index)),
+					formatNumber(driver.paybackAt(entry.index))
+				)
+				paint(entry.button, coins >= cost)
+			end
+
+			local available = availableUpgrades()
+			emptyLabel.Parent.Visible = #available == 0
+			for slot, entry in upgradeRows do
+				local upgrade = available[slot]
+				entry.upgrade = upgrade
+				entry.row.Visible = upgrade ~= nil
+				if upgrade then
+					entry.title.Text = upgrade.name
+					entry.detail.Text = formatNumber(upgrade.price) .. " moedas • " .. upgrade.kind
+					paint(entry.button, coins >= upgrade.price)
+				end
+			end
+		end
+	end
+
+	-- Page: Eventos
+
+	do
+		local page = addPage("Eventos")
+
+		section(page, "Coleta automática", "Recursos aguardam desbloqueio e disponibilidade no servidor.")
+		toggleRow(page, "AutoExtraUI", "Clicar extras da interface", "Clica GoldenCoin e Wrinklers com reação humana.")
+		toggleRow(page, "AutoGolden", "Coletar moedas douradas", "Inclui as moedas de tempestades.")
+		toggleRow(page, "AutoLump", "Colher lumps maduros", "Colhe apenas no estágio ripe, com chance garantida.")
+		toggleRow(page, "AutoMarket", "Comprar raros do mercado", "Inclui raros em estoque no planejador.")
+		toggleRow(page, "AutoReward", "Resgatar recompensa", "Resgata após cumprir os requisitos.")
+		toggleRow(page, "AutoWrinkler", "Coletar wrinklers", "Estoura um por vez, perto do intervalo configurado.")
+		numberRow(page, "WrinklerInterval", "Intervalo de wrinklers", "Segundos entre coletas automáticas.", 10, 3600)
+
+		section(page, "Ações manuais")
+		local lumpDetail = actionRow(page, "Colher lump agora", "", "Colher", function()
+			if not harvestLump() then
+				log("Colheita garantida ainda indisponível")
+			end
+		end)
+		local wrinklerDetail = actionRow(page, "Coletar wrinklers agora", "", "Coletar", function()
+			if not ready() or #driver.wrinklers() == 0 then
+				log("Nenhum wrinkler disponível")
+				return
+			end
+			requestWrinklers(os.clock())
+			log("Coletando wrinklers")
+		end)
+		local rewardDetail = actionRow(page, "Recompensa de conquistas", "", "Resgatar", function()
+			if not claimReward() then
+				log("Recompensa já recebida ou requisitos incompletos")
+			end
+		end)
+
+		section(page, "Feitiços", "Liberados pela Bola de Cristal; podem falhar e aplicar penalidades.")
+		toggleRow(page, "AutoSpell", "Conjuração automática", "Combo inteligente ou feitiço escolhido; aguarda mana.")
+		local spellIds = { "auto" }
+		for _, spell in Fortunes.list do
+			table.insert(spellIds, spell.id)
+		end
+		local spellChoiceDetail = actionRow(page, "Feitiço automático", "", "Trocar", function()
+			setOption("Spell", nextInList(spellIds, Config.Spell))
+			log("Feitiço escolhido: " .. (SPELL_NAMES[Config.Spell] or Config.Spell))
+		end)
+		onOption("Spell", function(spellId)
+			spellChoiceDetail.Text = SPELL_NAMES[spellId] or spellId
+		end)
+
+		local spellRows = {}
+		for _, spell in Fortunes.list do
+			local detail, castButton = actionRow(page, SPELL_NAMES[spell.id] or spell.name, "", "Conjurar", function()
+				if not castSpell(spell) then
+					log("Feitiço bloqueado ou mana insuficiente")
+				end
+			end)
+			table.insert(spellRows, { spell = spell, detail = detail, button = castButton })
+		end
+
+		section(page, "Mercado de raros", "Estoque aparece apenas durante o evento de mercado.")
+		local rareRows = {}
+		for _, generator in Catalog.rares do
+			local detail, buyButton = actionRow(page, generator.name, "", "Comprar 1", function()
+				if ready() and (marketStock()[generator.id] or 0) > 0 and buyGenerator(generator.id, true) then
+					log("Raro comprado: " .. generator.name)
+				else
+					log("Raro sem estoque ou saldo insuficiente")
+				end
+			end, { icon = generator.icon })
+			table.insert(rareRows, { generator = generator, detail = detail, button = buyButton })
+		end
+
+		pageUpdaters.Eventos = function()
+			if not ready() then
+				return
+			end
+			local stage = driver.lumpStage()
+			lumpDetail.Text = if stage == "locked"
+				then "Desbloqueia com progresso no jogo."
+				else string.format("Estágio %s • possui %s • %d min", stage, formatNumber(driver.lumps()), math.ceil(driver.lumpRipeIn() / 60))
+			wrinklerDetail.Text = #driver.wrinklers() .. " wrinklers disponíveis."
+			rewardDetail.Text = if driver.rewardOwned()
+				then "Recompensa recebida."
+				elseif driver.rewardReady() then "Recompensa pronta para resgatar."
+				else driver.achievementCount() .. "/" .. #Achievements.list .. " conquistas."
+
+			local mana, manaCap, coins = driver.mana(), driver.manaCap(), driver.coins()
+			for _, entry in spellRows do
+				local unlocked = driver.spellReady(entry.spell)
+				local cost = driver.spellCost(entry.spell)
+				entry.detail.Text = if unlocked
+					then string.format("Mana %s/%s • custo %s", formatNumber(mana), formatNumber(manaCap), formatNumber(cost))
+					else "Bloqueado: aumente a capacidade de mana."
+				paint(entry.button, unlocked and mana >= cost)
+			end
+
+			local stock = marketStock()
+			for _, entry in rareRows do
+				local index = indexById[entry.generator.id]
+				local price = driver.priceAt(index)
+				local left = stock[entry.generator.id] or 0
+				entry.detail.Text = string.format("Estoque %d • %s moedas • possui %d", left, formatNumber(price), driver.ownedAt(index))
+				paint(entry.button, left > 0 and coins >= price)
+			end
+		end
+	end
+
+	-- Page: Estatísticas
+
+	do
+		local page = addPage("Estatísticas")
+
+		section(page, "Sessão e progresso", "Contadores da sessão e dados atuais do jogo.")
+		local statsLabel = textCard(page, 300, 12)
+
+		section(page, "Atalhos do jogo")
+		actionRow(page, "Estatísticas completas", "Abre o painel de estatísticas do jogo.", "Abrir", function()
+			if openGamePanel("Stats") then
+				setWindowVisible(false)
+			end
+		end)
+		actionRow(page, "Legado e prestígio", "Abre o painel de ascensão do jogo.", "Abrir", function()
+			if openGamePanel("Legacy") then
+				setWindowVisible(false)
+			end
+		end)
+
+		section(page, "Registro de ações")
+		local logsLabel = textCard(page, 190, 11)
+		logsLabel.TextColor3 = Theme.Subtext
+
+		pageUpdaters["Estatísticas"] = function()
+			logsLabel.Text = table.concat(logs, "\n", 1, math.min(VISIBLE_LOGS, #logs))
+			if not ready() then
+				statsLabel.Text = "Aguardando o Coin Clicker…"
+				return
+			end
+
+			local buffs = {}
+			for _, buff in driver.buffs() do
+				table.insert(buffs, buff.name or buff.kind or tostring(buff.id))
+			end
+
+			statsLabel.Text = table.concat({
+				"Sessão: " .. formatDuration(os.clock() - startedAt),
+				"Cliques de mouse simulados: " .. counters.simulatedClicks,
+				"Extras clicados na interface: " .. counters.extraClicks,
+				string.format("Pedidos: %d geradores • %d melhorias • %d raros", counters.buildings, counters.upgrades, counters.rares),
+				string.format(
+					"Douradas: %d   |   Lumps: %d   |   Wrinklers: %d   |   Feitiços: %d",
+					counters.goldens,
+					counters.harvests,
+					counters.wrinklers,
+					counters.spells
+				),
+				"",
+				"Valor do clique: " .. formatNumber(driver.clickValue()) .. "   |   Geradores: " .. driver.totalOwned(),
+				"Ganho total: " .. formatNumber(driver.totalEarned()) .. "   |   Gasto total: " .. formatNumber(driver.totalSpent()),
+				"Conquistas: " .. driver.achievementCount() .. "/" .. #Achievements.list .. "   |   Cliques: " .. formatNumber(driver.totalClicks()),
+				"Prestígio: " .. formatNumber(driver.prestigeLevel()) .. "   |   Ganho de ascensão: " .. formatNumber(driver.prestigeGain()),
+				"Mana: " .. formatNumber(driver.mana()) .. "/" .. formatNumber(driver.manaCap()) .. "   |   Lumps: " .. formatNumber(driver.lumps()),
+				"Buffs ativos: " .. (if #buffs > 0 then table.concat(buffs, ", ") else "nenhum"),
+				string.format("Servidor: %.1f cliques/s • %s moedas/s", server.rate, formatNumber(server.income)),
+				string.format("Compras confirmadas: %d • pendentes: %d • rejeitadas: %d", server.confirmed, #pending, server.rejected),
+			}, "\n")
+		end
+	end
+
+	-- Page: Configurações
+
+	do
+		local page = addPage("Configurações")
+
+		section(page, "Interface", "Ajustes visuais do laptop e do jogo.")
+		toggleRow(page, "CompactView", "Compact view", "Remove o fundo e a coluna central do laptop.")
+		numberRow(page, "CompactScale", "Escala do compact view", "Tamanho das colunas no modo compacto, de 0.4 a 1.", 0.4, 1)
+		toggleRow(page, "Performance", "Modo desempenho", "Remove partículas, números e som de clique.")
+
+		section(page, "Controles", "Configuração mantida enquanto a sessão estiver ativa.")
+		toggleRow(page, "Paused", "Pausar automações", "Ações manuais continuam disponíveis.")
+		toggleRow(page, "Verbose", "Diagnóstico no console", "Exibe registros e contadores no console.")
+		actionRow(page, "Desligar automações", "Desativa todos os recursos automáticos.", "Desligar", function()
+			for _, key in AUTOMATION_KEYS do
+				setOption(key, false)
+			end
+			log("Todos os recursos automáticos desligados")
+		end)
+		actionRow(page, "Zerar contadores", "Zera os contadores da sessão.", "Zerar", function()
+			for key in counters do
+				counters[key] = 0
+			end
+			log("Contadores da sessão zerados")
+		end)
+		actionRow(page, "Reconectar ao jogo", "Recria o backend privado do Coin Clicker.", "Reconectar", reconnect)
+		actionRow(page, "Minimizar interface", "F8 ou botão AL reabre; o farm continua.", "Minimizar", function()
+			setWindowVisible(false)
+		end)
+		actionRow(page, "Descarregar Auto Laptop", "Remove interface, conexões, backend e restaura efeitos.", "Descarregar", session.Stop, {
+			color = Theme.Danger,
+		})
+	end
+
+	-- Interaction
+
+	local function viewportSize()
+		local camera = workspace.CurrentCamera
+		return if camera then camera.ViewportSize else Vector2.new(1920, 1080)
+	end
+
+	local function isPointer(input)
+		return input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch
+	end
+
+	local function makeDraggable(target, handles)
+		local dragStart, dragOrigin
+		local moved = false
+		for _, handle in handles do
+			janitor:connect(handle.InputBegan, function(input)
+				if isPointer(input) then
+					dragStart = input.Position
+					dragOrigin = target.AbsolutePosition + target.AbsoluteSize * target.AnchorPoint
+					moved = false
+				end
+			end)
+		end
+		janitor:connect(UserInputService.InputChanged, function(input)
+			local inputType = input.UserInputType
+			if not dragStart or (inputType ~= Enum.UserInputType.MouseMovement and inputType ~= Enum.UserInputType.Touch) then
+				return
+			end
+			local delta = Vector2.new(input.Position.X - dragStart.X, input.Position.Y - dragStart.Y)
+			if not moved and delta.Magnitude < DRAG_THRESHOLD then
+				return
+			end
+			moved = true
+			local viewport, size = viewportSize(), target.AbsoluteSize
+			local low, high = size * target.AnchorPoint, viewport - size * (Vector2.one - target.AnchorPoint)
+			local point = dragOrigin + delta
+			target.Position = UDim2.fromOffset(
+				math.clamp(point.X, low.X, math.max(low.X, high.X)),
+				math.clamp(point.Y, low.Y, math.max(low.Y, high.Y))
+			)
+		end)
+		janitor:connect(UserInputService.InputEnded, function(input)
+			if isPointer(input) then
+				dragStart = nil
+			end
+		end)
+		return function()
+			return moved
+		end
+	end
+
+	makeDraggable(window, { topBar, sidebar })
+	reopenDragged = makeDraggable(reopenButton, { reopenButton })
+
+	janitor:connect(UserInputService.InputBegan, function(input, processed)
+		if processed then
+			return
+		end
+		if input.KeyCode == Enum.KeyCode.F6 then
+			togglePause()
+		elseif input.KeyCode == Enum.KeyCode.F7 then
+			setOption("MouseClickSpam", not Config.MouseClickSpam)
+			log(if Config.MouseClickSpam then "Autoclick ativado pelo F7" else "Autoclick pausado pelo F7")
+		elseif input.KeyCode == Enum.KeyCode.F8 then
+			setWindowVisible(not window.Visible)
+		end
+	end)
+
+	-- Refresh
+
+	local function refreshInterface()
+		local viewport = viewportSize()
+		windowScale.Scale = math.clamp(math.min((viewport.X - 24) / WINDOW_SIZE.X, (viewport.Y - 24) / WINDOW_SIZE.Y), 0.4, 1)
+
+		local connected = ready()
+		connectionDot.BackgroundColor3 = if connected then Theme.Success else Theme.Warning
+		connectionLabel.Text = if connected then "Conectado" else "Aguardando jogo"
+
+		if connected then
+			local stamina = driver.stamina()
+			coinsMetric.Text = formatNumber(server.coins or driver.coins())
+			productionMetric.Text = formatNumber(driver.coinsPerSecond())
+			staminaMetric.Text = string.format(if staminaResting then "%d%%  •  recuperando" else "%d%%", math.floor(stamina * 100))
+			staminaMetric.TextColor3 = if staminaResting then Theme.Warning elseif stamina < 0.2 then Theme.Danger else Theme.Success
+		else
+			coinsMetric.Text, productionMetric.Text, staminaMetric.Text = "—", "—", "—"
+		end
+
+		local update = window.Visible and pageUpdaters[selectedPage]
+		if update then
+			update()
+		end
+	end
+
+	return refreshInterface, selectPage
+end
+
+local refreshInterface, selectPage = buildInterface()
+
+-- Scheduler / Loops
+
+-- Task de Autoclick Humanizado Anti-Cheat
+task.spawn(function()
+	while running do
+		if Config.MouseClickSpam and not Config.Paused and ready() then
+			attempt("Clique de Mouse", clickSimulatedMouseOnCoin)
+			-- Variação humanizada no intervalo entre cliques (evita detecção linear)
+			task.wait(rng:NextNumber(0.04, 0.09))
+		else
+			task.wait(0.1)
+		end
+	end
+end)
+
+local jobs = {}
+
+local function every(interval, callback)
+	table.insert(jobs, { interval = interval, callback = callback, last = os.clock() })
+end
+
+local function anyEnabled(keys)
+	for _, key in keys do
+		if Config[key] then
+			return true
+		end
+	end
+	return false
+end
+
+local function automate(keys, interval, action)
+	local name = table.concat(keys, "/")
+	every(interval, function(now)
+		if Config.Paused or not ready() or not anyEnabled(keys) then
+			return
+		end
+		if attempt(name, action, now) or failures[name] < MAX_FAILURES then
+			return
+		end
+		for _, key in keys do
+			setOption(key, false)
+		end
+		log("Desativado após " + MAX_FAILURES + " falhas: " + name, true)
+	end)
+end
+
+automate({ "AutoBuy", "AutoUpgrade", "AutoMarket" }, 0.3, runPurchases)
+automate({ "AutoLump" }, 2, harvestLump)
+automate({ "AutoReward" }, 2, claimReward)
+automate({ "AutoSpell" }, 1, function()
+	castSpell(pickSpell())
+end)
+every(COLLECT_TICK, function(now)
+	if ready() then
+		attempt("Coleta", runCollector, now)
+	end
+end)
+every(1, function()
+	attempt("Desempenho", syncPerformance)
+end)
+every(0.5, function()
+	if Config.CompactView then
+		attempt("Laptop compacto", compactLaptop)
+	end
+end)
+every(0.35, function()
+	attempt("Interface", refreshInterface)
+end)
+every(60, function()
+	if Config.Verbose then
+		print(
+			LOG_PREFIX,
+			string.format(
+				"Servidor: %.1f cliques/s, %s moedas/s; confirmadas %d, rejeitadas %d",
+				server.rate,
+				formatNumber(server.income),
+				server.confirmed,
+				server.rejected
+			)
+		)
+	end
+end)
+
+-- Start
+
+bindGameGui(playerGui:FindFirstChild(GAME_GUI_NAME))
+
+janitor:connect(playerGui.ChildAdded, function(child)
+	if child.Name == GAME_GUI_NAME then
+		bindGameGui(child)
+	end
+end)
+janitor:connect(playerGui.ChildRemoved, function(child)
+	if child == gameGui.root then
+		bindGameGui(playerGui:FindFirstChild(GAME_GUI_NAME))
+	end
+end)
+janitor:connect(remotes.Sync.OnClientEvent, onSync)
+janitor:connect(RunService.Heartbeat, function()
+	local now = os.clock()
+	for _, job in jobs do
+		local interval = if type(job.interval) == "function" then job.interval() else job.interval
+		if now - job.last >= interval then
+			job.last = now
+			job.callback(now)
+		end
+	end
+end)
+
+selectPage("Painel")
+attempt("Desempenho", syncPerformance)
+attempt("Interface", refreshInterface)
+log("Auto Laptop Pro iniciado pausado; pressione F6 para iniciar tudo ou F7 para ligar/desligar o autoclick.")
+print(LOG_PREFIX, "Pronto! Pressione F6 para iniciar ou F7 para alternar o autoclick.")
