@@ -5,8 +5,8 @@ local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 
-local LOG_PREFIX = "[Auto Laptop Pro]"
-print(LOG_PREFIX, "Carregando...")
+local LOG_PREFIX = "[Auto Laptop]"
+print(LOG_PREFIX, "Carregando…")
 
 assert(
 	type(getgenv) == "function"
@@ -16,8 +16,7 @@ assert(
 	"Executor sem suporte a introspecção de conexões"
 )
 
-local player = Players.LocalPlayer
-local playerGui = player:WaitForChild("PlayerGui", 10)
+local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui", 10)
 assert(playerGui, "PlayerGui indisponível")
 
 local featuresFolder = ReplicatedStorage:WaitForChild("Features", 10)
@@ -28,10 +27,12 @@ local vide = require(ReplicatedStorage.Packages.vide)
 local Catalog = require(feature.Catalog)
 local Upgrades = require(feature.Upgrades)
 local Fortunes = require(feature.Fortunes)
+local Rules = require(feature.Rules)
 local Achievements = require(feature.Achievements)
 local Engine = require(feature.Engine)
 local SettingsFactory = require(feature.Settings)
 local ServerBackend = require(feature.Drivers.ServerBackend)
+local remotes = require(feature.Remotes).get()
 
 -- Constants
 
@@ -47,7 +48,7 @@ local SAMPLE_WINDOW = 8
 local PENDING_TIMEOUT = 8
 local COLLECT_TICK = 0.05
 local REACTION_DELAY = NumberRange.new(0.45, 1.3)
-local CLICK_GAP = NumberRange.new(0.04, 0.08) -- Cadência humanizada para o autoclick
+local CLICK_GAP = NumberRange.new(0.22, 0.6)
 local HESITATION = NumberRange.new(0.4, 1.2)
 local HESITATION_CHANCE = 0.12
 local WRINKLER_JITTER = 0.15
@@ -55,6 +56,7 @@ local WRINKLER_WINDOW = 15
 local PLAN_INTERVAL = 0.45
 local SAVE_ADVANTAGE = 1.08
 local UPGRADE_SLOTS = 12
+local MAX_SIMULATED_CPS = 25
 local PANEL_TRANSPARENCY = 0.15
 local SCREEN_COVERAGE = 0.9
 local COMPACT_SCALE_NAME = "AutoLaptopScale"
@@ -205,6 +207,7 @@ local Config = {
 }
 
 local counters = {
+	uiSignals = 0,
 	simulatedClicks = 0,
 	extraClicks = 0,
 	buildings = 0,
@@ -726,7 +729,7 @@ local function hasStamina()
 	return not staminaResting
 end
 
--- Game interface tracking
+-- Game interface
 
 local gameGuiJanitor = janitor:add(Janitor.new())
 local gameGui = {
@@ -901,7 +904,7 @@ onOption("CompactView", function(enabled)
 	end
 end)
 
--- Anti-Cheat Safe: Humanized Simulated Mouse Clicker
+-- Anti-Cheat Bypass: Simulated Mouse Click Engine
 local rng = Random.new()
 
 local function clickSimulatedMouseOnCoin()
@@ -911,8 +914,8 @@ local function clickSimulatedMouseOnCoin()
 	end
 
 	local center = coin.AbsolutePosition + (coin.AbsoluteSize * 0.5)
-	local offsetX = rng:NextNumber(-coin.AbsoluteSize.X * 0.25, coin.AbsoluteSize.X * 0.25)
-	local offsetY = rng:NextNumber(-coin.AbsoluteSize.Y * 0.25, coin.AbsoluteSize.Y * 0.25)
+	local offsetX = rng:NextNumber(-coin.AbsoluteSize.X * 0.2, coin.AbsoluteSize.X * 0.2)
+	local offsetY = rng:NextNumber(-coin.AbsoluteSize.Y * 0.2, coin.AbsoluteSize.Y * 0.2)
 	local clickPos = Vector2.new(center.X + offsetX, center.Y + offsetY)
 
 	VirtualInputManager:SendMouseButtonEvent(clickPos.X, clickPos.Y, 0, true, game, 0)
@@ -1488,7 +1491,7 @@ local function buildInterface()
 	})
 	label({
 		Parent = sidebar,
-		Text = "F6 pausar bot  •  F7 pausar click\nF8 ocultar painel",
+		Text = "F6 pausar  •  F7 click mouse\nF8 ocultar painel",
 		Position = UDim2.new(0, 20, 1, -48),
 		Size = UDim2.new(1, -40, 0, 30),
 		TextSize = 10,
@@ -1795,8 +1798,9 @@ local function buildInterface()
 	do
 		local page = addPage("Farm")
 
-		section(page, "Cliques Protegidos", "Autoclick com simulação de mouse real (Anti-Cheat Safe).")
-		toggleRow(page, "MouseClickSpam", "Autoclick com Mouse Simulado", "Simula cliques físicos no BigCoin.")
+		section(page, "Cliques Protegidos", "Simulação de cliques do mouse no BigCoin (Anti-Cheat Safe).")
+		toggleRow(page, "MouseClickSpam", "Autoclick com Mouse Simulado", "Simula cliques reais no BigCoin via VirtualInputManager.")
+		numberRow(page, "TargetCPS", "Meta de Cliques/s (CPS)", "Frequência de cliques por segundo. Recomendado: 15-20.", 1, MAX_SIMULATED_CPS)
 
 		section(page, "Stamina", "Para os cliques na moeda quando a stamina acaba e espera recuperar.")
 		toggleRow(page, "StaminaGuard", "Respeitar stamina", "Pausa o autoclick abaixo do limite mínimo.")
@@ -2148,6 +2152,7 @@ local function buildInterface()
 		if input.KeyCode == Enum.KeyCode.F6 then
 			togglePause()
 		elseif input.KeyCode == Enum.KeyCode.F7 then
+			-- Alterna o autoclick do mouse via tecla F7
 			setOption("MouseClickSpam", not Config.MouseClickSpam)
 			log(if Config.MouseClickSpam then "Autoclick ativado pelo F7" else "Autoclick pausado pelo F7")
 		elseif input.KeyCode == Enum.KeyCode.F8 then
@@ -2186,15 +2191,18 @@ end
 
 local refreshInterface, selectPage = buildInterface()
 
--- Scheduler / Loops
+-- Scheduler
 
--- Task de Autoclick Humanizado Anti-Cheat
+-- Task dedicada de autoclick humano com variação de tempo
 task.spawn(function()
 	while running do
 		if Config.MouseClickSpam and not Config.Paused and ready() then
+			local targetCps = math.clamp(Config.TargetCPS, 1, MAX_SIMULATED_CPS)
+			local baseInterval = 1 / targetCps
+			local delay = baseInterval + rng:NextNumber(-baseInterval * 0.25, baseInterval * 0.25)
+			
 			attempt("Clique de Mouse", clickSimulatedMouseOnCoin)
-			-- Variação humanizada no intervalo entre cliques (evita detecção linear)
-			task.wait(rng:NextNumber(0.04, 0.09))
+			task.wait(math.max(0.02, delay))
 		else
 			task.wait(0.1)
 		end
@@ -2228,7 +2236,7 @@ local function automate(keys, interval, action)
 		for _, key in keys do
 			setOption(key, false)
 		end
-		log("Desativado após " + MAX_FAILURES + " falhas: " + name, true)
+		log("Desativado após " .. MAX_FAILURES .. " falhas: " .. name, true)
 	end)
 end
 
@@ -2298,5 +2306,5 @@ end)
 selectPage("Painel")
 attempt("Desempenho", syncPerformance)
 attempt("Interface", refreshInterface)
-log("Auto Laptop Pro iniciado pausado; pressione F6 para iniciar tudo ou F7 para ligar/desligar o autoclick.")
-print(LOG_PREFIX, "Pronto! Pressione F6 para iniciar ou F7 para alternar o autoclick.")
+log("Auto Laptop iniciado pausado; pressione F6 para iniciar tudo ou F7 para alternar o autoclick do mouse.")
+print(LOG_PREFIX, "Pronto. Pausado; pressione F6 para começar ou F7 para o autoclick.")
