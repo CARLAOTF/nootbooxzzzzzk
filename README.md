@@ -47,7 +47,8 @@ local CHART_SAMPLES = 24
 local SAMPLE_WINDOW = 8
 local PENDING_TIMEOUT = 8
 local COLLECT_TICK = 0.05
-local REACTION_DELAY = NumberRange.new(0.45, 1.3)
+-- ALTERADO: Atraso aleatório customizado para os eventos de 1 a 3.4 segundos
+local REACTION_DELAY = NumberRange.new(1.0, 3.4)
 local CLICK_GAP = NumberRange.new(0.22, 0.6)
 local HESITATION = NumberRange.new(0.4, 1.2)
 local HESITATION_CHANCE = 0.12
@@ -2152,7 +2153,6 @@ local function buildInterface()
 		if input.KeyCode == Enum.KeyCode.F6 then
 			togglePause()
 		elseif input.KeyCode == Enum.KeyCode.F7 then
-			-- Alterna o autoclick do mouse via tecla F7
 			setOption("MouseClickSpam", not Config.MouseClickSpam)
 			log(if Config.MouseClickSpam then "Autoclick ativado pelo F7" else "Autoclick pausado pelo F7")
 		elseif input.KeyCode == Enum.KeyCode.F8 then
